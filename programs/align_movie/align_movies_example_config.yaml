@@ -1,0 +1,107 @@
+# Alignment Movies Configuration File
+# This config file contains all settings for running the align frames manager
+
+computational_config:
+  # GPU/CPU device to use
+  # Can be an integer (e.g., 0 for GPU 0), a string like "cuda:0", or "cpu"
+  gpu_id: 0
+
+movie_config:
+  # Required: Path to the movie file (.mrc, .tif, or .eer)
+  movie_path: "movies/my_movie.eer"
+  
+  # Required: Pixel size in Angstroms per pixel
+  pixel_size: 0.936
+  
+  # Required: Total fluence in electrons per Angstrom^2
+  fluence: 54.5
+  
+  # Required: Fluence per frame in electrons per Angstrom^2/frame
+  fluence_per_frame: 1.0
+  
+  # Pre-exposure time in seconds (default: 0.0)
+  pre_exposure: 0.0
+  
+  # Accelerating voltage in kilovolts (default: 300.0)
+  voltage: 300.0
+  
+  # Optional: Path to gain map file (.mrc, .tif, .tiff, or .gain)
+  # If not provided, gain map will be set to None
+  gain_path: null
+  
+  # Optional: Path to dark map file (.mrc, .tif, .tiff, or .dark)
+  # If not provided, dark map will be set to None
+  dark_path: null
+  
+  # Gain flip: 0 = no flip, 1 = flipY, 2 = flipX (default: 0)
+  gain_flip: 0
+  
+  # Gain rotation: 0 = no rotation, 1 = 90°, 2 = 180°, 3 = 270° (default: 0)
+  gain_rot: 0
+  
+  # Whether to multiply movie by gain map (True) or divide (False) (default: True)
+  multiply_gain: true
+
+output_config:
+  # Whether to allow overwriting existing output files (default: true)
+  allow_file_overwrite: true
+  
+  # Optional: Path to save dose-weighted sum output (.mrc)
+  dw_sum_output_path: ../../example/output/dw_sum.mrc
+  
+  # Optional: Path to save deformation field output
+  deformation_field_output_path: ../../example/output/def_field.csv
+  
+  # Optional: Path to save motion-corrected movie output (.mrc)
+  motion_corrected_movie_output_path: null
+  
+  # Optional: Path to save rendered (unaligned) movie output (.mrc)
+  rendered_movie_output_path: null
+  
+  # Optional: Path to save non-dose-weighted sum output (.mrc)
+  non_dw_sum_output_path: null
+  
+  # Optional: Path to save loss trajectories output (.csv)
+  loss_trajectories_output_path: null
+
+alignment_config:
+  # Required: Resolution of deformation field in pixels (x, y, z)
+  # Example: [54, 4, 4] for 54 frames, 4x4 grid
+  deformation_field_resolution: [54, 1, 1]
+  
+  # Optional: Path to initial deformation field file
+  # If not provided, deformation field will be initialized to zero
+  deformation_field_path: null
+  
+  # Number of optimization iterations (default: 100)
+  n_iterations: 100
+  
+  # Shape of patch in pixels (width, height) (default: [1024, 1024])
+  patch_shape: [1024, 1024]
+  
+  # Type of interpolation grid: "catmull_rom" or "bspline" (default: "catmull_rom")
+  grid_type: "catmull_rom"
+  
+  # Type of loss function: "mse", "cc", or "ncc" (default: "mse")
+  # mse = mean square error
+  # cc = cross correlation
+  # ncc = normalized cross correlation
+  loss_type: "ncc"
+  
+  # Type of optimizer: "adam" or "lbfgs" (default: "adam")
+  optimizer_type: "adam"
+  
+  # Learning rate for optimization (default: 0.2)
+  learning_rate: 0.2
+  
+  # B-factor for filtering (default: 500)
+  b_factor: 500.0
+  
+  # Frequency range for filtering in Angstroms [high, low]
+  # First value must be larger than second (default: [300, 10])
+  frequency_range: [300.0, 10.0]
+  
+  # Whether to skip movie preparation step (default: false)
+  # Set to true for subsequent passes after initial alignment
+  skip_movie_preparation: false
+

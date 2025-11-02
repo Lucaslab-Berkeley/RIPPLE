@@ -35,7 +35,20 @@ classifiers = [
     "Typing :: Typed",
 ]
 # add your package dependencies here
-dependencies = []
+dependencies = [
+    "torch",
+    "numpy",
+    "pandas",
+    "mrcfile",
+    "eerfile",
+    "tifffile",
+    "pydantic",
+    "pyyaml",
+    "tqdm",
+    "types-PyYAML",
+    "torch-motion-correction",
+    "torch-fourier-filter",
+]
 
 # https://peps.python.org/pep-0621/#dependencies-optional-dependencies
 # add dependencies for "extra" features here.  Not dev dependencies.
@@ -65,8 +78,10 @@ dev = [
     "mypy",
     "pdbpp",  # https://github.com/pdbpp/pdbpp
     "pre-commit-uv",
+    "pre-commit",
     "rich",  # https://github.com/Textualize/rich
     "ruff",
+    "pylint",
 ]
 
 [tool.uv.sources]

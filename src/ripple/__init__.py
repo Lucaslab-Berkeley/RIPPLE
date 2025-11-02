@@ -1,4 +1,7 @@
-"""Cryo-EM movie frame alignment and polishing. RIPPLE: Realigning image patches and polishing local environment"""
+"""Cryo-EM movie frame alignment and polishing.
+
+RIPPLE: Realigning image patches and polishing local environment
+"""
 
 from importlib.metadata import PackageNotFoundError, version
 

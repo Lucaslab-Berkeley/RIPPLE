@@ -1,0 +1,272 @@
+"""Utility functions dealing with basic data I/O operations."""
+
+import os
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import eerfile
+import mrcfile
+import numpy as np
+import pandas as pd
+import torch
+from tifffile import TiffFile
+from torch_motion_correction import (
+    read_deformation_field_from_csv,
+    write_deformation_field_to_csv,
+)
+
+if TYPE_CHECKING:
+    from torch_motion_correction import OptimizationTracker
+
+
+def render_eer_to_tensor(
+    eer_path: str | os.PathLike | Path,
+    fluence_per_frame: float,
+    total_fluence: float,
+) -> torch.Tensor:
+    """Renders an EER file to a tensor.
+
+    Parameters
+    ----------
+    eer_path : str | os.PathLike | Path
+        Path to the EER file.
+    fluence_per_frame : float
+        Fluence per frame in electrons per Angstrom^2/frame.
+    total_fluence : float
+        Total fluence in electrons per Angstrom^2.
+
+    Returns
+    -------
+    torch.Tensor
+        The rendered EER data as a tensor.
+    """
+    movie_data = eerfile.render(
+        eer_path, dose_per_output_frame=fluence_per_frame, total_fluence=total_fluence
+    )
+    return torch.tensor(movie_data, dtype=torch.float32)
+
+
+def read_tif_to_tensor(tif_path: str | os.PathLike | Path) -> torch.Tensor:
+    """Reads a TIFF file and returns the data as a tensor.
+
+    Parameters
+    ----------
+    tif_path : str | os.PathLike | Path
+        Path to the TIFF file.
+
+    Returns
+    -------
+    torch.Tensor
+        The TIFF data as a tensor, copied and converted to float32 if needed.
+    """
+    with TiffFile(tif_path) as tiff:
+        tif_frames = tiff.asarray()
+    return torch.tensor(tif_frames, dtype=torch.float32)
+
+
+def read_mrc_to_numpy(mrc_path: str | os.PathLike | Path) -> np.ndarray:
+    """Reads an MRC file and returns the data as a numpy array.
+
+    Parameters
+    ----------
+    mrc_path : str | os.PathLike | Path
+        Path to the MRC file.
+
+    Returns
+    -------
+    np.ndarray
+        The MRC data as a numpy array, copied.
+    """
+    with mrcfile.open(mrc_path) as mrc:
+        return mrc.data.copy()
+
+
+def read_mrc_to_tensor(mrc_path: str | os.PathLike | Path) -> torch.Tensor:
+    """Reads an MRC file and returns the data as a torch tensor.
+
+    Parameters
+    ----------
+    mrc_path : str | os.PathLike | Path
+        Path to the MRC file.
+
+    Returns
+    -------
+    torch.Tensor
+        The MRC data as a tensor, copied and converted to float32 if needed.
+    """
+    tensor = torch.tensor(read_mrc_to_numpy(mrc_path))
+    # Convert float16 to float32 for FFT compatibility
+    if tensor.dtype == torch.float16:
+        tensor = tensor.to(torch.float32)
+    return tensor
+
+
+def write_mrc_from_numpy(
+    data: np.ndarray,
+    mrc_path: str | os.PathLike | Path,
+    mrc_header: dict | None = None,
+    overwrite: bool = False,
+) -> None:
+    """Writes a numpy array to an MRC file.
+
+    NOTE: Writing header information is not currently implemented.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        The data to write to the MRC file.
+    mrc_path : str | os.PathLike | Path
+        Path to the MRC file.
+    mrc_header : Optional[dict]
+        Dictionary containing header information. Default is None.
+    overwrite : bool
+        Overwrite argument passed to mrcfile.new. Default is False.
+    """
+    if mrc_header is not None:
+        raise NotImplementedError("Setting header info is not yet implemented.")
+
+    with mrcfile.new(mrc_path, overwrite=overwrite) as mrc:
+        mrc.set_data(data)
+
+
+def write_mrc_from_tensor(
+    data: torch.Tensor,
+    mrc_path: str | os.PathLike | Path,
+    mrc_header: dict | None = None,
+    overwrite: bool = False,
+) -> None:
+    """Writes a tensor array to an MRC file.
+
+    NOTE: Not currently implemented.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        The data to write to the MRC file.
+    mrc_path : str | os.PathLike | Path
+        Path to the MRC file.
+    mrc_header : Optional[dict]
+        Dictionary containing header information. Default is None.
+    overwrite : bool
+        Overwrite argument passed to mrcfile.new. Default is False.
+    """
+    write_mrc_from_numpy(data.numpy(), mrc_path, mrc_header, overwrite)
+
+
+def load_mrc_image(file_path: str | os.PathLike | Path) -> torch.Tensor:
+    """Helper function for loading an two-dimensional MRC image into a tensor.
+
+    Parameters
+    ----------
+    file_path : str | os.PathLike | Path
+        Path to the MRC file.
+
+    Returns
+    -------
+    torch.Tensor
+        The MRC image as a tensor, converted to float32 for FFT compatibility.
+
+    Raises
+    ------
+    ValueError
+        If the MRC file is not two-dimensional.
+    """
+    tensor = read_mrc_to_tensor(file_path)
+
+    # Check that tensor is 2D, squeezing if necessary
+    tensor = tensor.squeeze()
+    if len(tensor.shape) != 2:
+        raise ValueError(f"MRC file is not two-dimensional. Got shape: {tensor.shape}")
+
+    return tensor
+
+
+def load_mrc_movie(file_path: str | os.PathLike | Path) -> torch.Tensor:
+    """Helper function for loading an three-dimensional MRC movie into a tensor.
+
+    Parameters
+    ----------
+    file_path : str | os.PathLike | Path
+        Path to the MRC file.
+
+    Returns
+    -------
+    torch.Tensor
+        The MRC movie as a tensor, converted to float32 for FFT compatibility.
+
+    Raises
+    ------
+    ValueError
+        If the MRC file is not three-dimensional.
+    """
+    tensor = read_mrc_to_tensor(file_path)
+
+    # Check that tensor is 3D, squeezing if necessary
+    tensor = tensor.squeeze()
+    if len(tensor.shape) != 3:
+        raise ValueError(
+            f"MRC file is not three-dimensional. Got shape: {tensor.shape}"
+        )
+
+    return tensor
+
+
+def load_deformation_field(
+    file_path: str | os.PathLike | Path,
+) -> torch.Tensor:
+    """Helper function for loading a deformation field from a CSV file.
+
+    Parameters
+    ----------
+    file_path : str | os.PathLike | Path
+        Path to the CSV file.
+
+    Returns
+    -------
+    torch.Tensor
+        The deformation field as a tensor.
+    """
+    return read_deformation_field_from_csv(file_path)
+
+
+def save_deformation_field(
+    deformation_field: torch.Tensor,
+    file_path: str | os.PathLike | Path,
+) -> None:
+    """Helper function for saving a deformation field to a CSV file.
+
+    Parameters
+    ----------
+    deformation_field : torch.Tensor
+        The deformation field to save.
+    file_path : str | os.PathLike | Path
+        Path to the CSV file.
+
+    Returns
+    -------
+    None
+    """
+    write_deformation_field_to_csv(deformation_field, file_path)
+
+
+def write_trajectory_to_csv(
+    trajectory: "OptimizationTracker",
+    file_path: str | os.PathLike | Path,
+) -> None:
+    """Helper function for saving a trajectory to a CSV file.
+
+    Parameters
+    ----------
+    trajectory : OptimizationTracker
+        The trajectory to save. Must have a `checkpoints` attribute.
+    file_path : str | os.PathLike | Path
+        Path to the CSV file.
+
+    Returns
+    -------
+    None
+    """
+    df = pd.DataFrame(
+        [{"step": cp.step, "loss": cp.loss} for cp in trajectory.checkpoints]
+    )
+    df.to_csv(file_path, index=False)
