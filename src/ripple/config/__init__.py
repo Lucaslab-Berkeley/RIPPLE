@@ -1,13 +1,19 @@
 """Configuration for RIPPLE."""
 
-from .alignment_config import AlignmentConfig
+from .alignment_config import (
+    AlignFramesConfig,
+    BaseAlignmentConfig,
+    PolishParticlesConfig,
+)
 from .computational_config import ComputationalConfig
 from .movie_config import MovieConfig
 from .output_config import OutputConfig
 
 __all__ = [
-    "AlignmentConfig",
+    "AlignFramesConfig",
+    "BaseAlignmentConfig",
     "ComputationalConfig",
     "MovieConfig",
     "OutputConfig",
+    "PolishParticlesConfig",
 ]

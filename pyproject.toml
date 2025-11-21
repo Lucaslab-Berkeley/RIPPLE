@@ -37,6 +37,7 @@ classifiers = [
 # add your package dependencies here
 dependencies = [
     "torch",
+    "einops",
     "numpy",
     "pandas",
     "mrcfile",
@@ -142,10 +143,10 @@ show_error_codes = true
 pretty = true
 # plugins = ["pydantic.mypy"]
 
-# # module specific overrides
-# [[tool.mypy.overrides]]
-# module = ["numpy.*",]
-# ignore_errors = true
+# module specific overrides
+[[tool.mypy.overrides]]
+module = ["yaml", "yaml.*"]
+ignore_missing_imports = true
 
 # https://coverage.readthedocs.io/
 [tool.coverage.report]

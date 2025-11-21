@@ -13,8 +13,11 @@ PositiveInt = Annotated[int, Field(gt=0)]
 PositiveFloat = Annotated[float, Field(gt=0)]
 
 
-class AlignmentConfig(BaseModelRIPPLE):
-    """Configuration for alignment of frames of a cryo-EM movie.
+class BaseAlignmentConfig(BaseModelRIPPLE):
+    """Base configuration for alignment operations.
+
+    This class contains common parameters shared between different alignment
+    operations (e.g., align_frames and polish_particles).
 
     Parameters
     ----------
@@ -25,24 +28,13 @@ class AlignmentConfig(BaseModelRIPPLE):
         initialized to zero.
     n_iterations: int
         Number of optimization iterations. Default is 100.
-    patch_shape: tuple[int, int]
-        Shape of the patch in pixels (width, height). Default is (1024, 1024).
-    grid_type: Literal["catmull-rom", "bspline"]
-        Type of interpolation grid. Must be 'catmull-rom' or 'bspline'.
-        Default is 'catmull-rom'.
-    loss_type: Literal["mse", "cc", "ncc"]
-        Type of loss function. Must be 'mse' (mean square error), 'cc'
-        (cross correlation), or 'ncc' (normalized cross correlation).
-        Default is 'mse'.
+    grid_type: Literal["catmull_rom", "bspline"]
+        Type of interpolation grid. Must be 'catmull_rom' or 'bspline'.
+        Default is 'catmull_rom'.
     optimizer_type: Literal["adam", "lbfgs"]
         Type of optimizer. Must be 'adam' or 'lbfgs'. Default is 'adam'.
     learning_rate: float
         Learning rate for optimization. Default is 0.2.
-    b_factor: float
-        B-factor for filtering. Default is 500.
-    frequency_range: tuple[float, float]
-        Frequency range for filtering in Angstroms. First value must be
-        larger than the second value. Default is (300, 10).
     skip_movie_preparation: bool
         Whether to skip the movie preparation step. Default is False.
     """
@@ -50,13 +42,9 @@ class AlignmentConfig(BaseModelRIPPLE):
     deformation_field_resolution: tuple[PositiveInt, PositiveInt, PositiveInt]
     deformation_field_path: str | None = None
     n_iterations: PositiveInt = 100
-    patch_shape: tuple[PositiveInt, PositiveInt] = (1024, 1024)
     grid_type: Literal["catmull_rom", "bspline"] = "catmull_rom"
-    loss_type: Literal["mse", "cc", "ncc"] = "mse"
     optimizer_type: Literal["adam", "lbfgs"] = "adam"
     learning_rate: float = 0.2
-    b_factor: float = 500
-    frequency_range: tuple[PositiveFloat, PositiveFloat] = (300, 10)
     skip_movie_preparation: bool = False
 
     @property
@@ -65,6 +53,32 @@ class AlignmentConfig(BaseModelRIPPLE):
         if self.deformation_field_path is None:
             return torch.zeros(self.deformation_field_resolution, dtype=torch.float32)
         return load_deformation_field(self.deformation_field_path)
+
+
+class AlignFramesConfig(BaseAlignmentConfig):
+    """Configuration for alignment of frames of a cryo-EM movie.
+
+    This extends BaseAlignmentConfig with parameters specific to frame alignment.
+
+    Parameters
+    ----------
+    patch_shape: tuple[int, int]
+        Shape of the patch in pixels (width, height). Default is (1024, 1024).
+    loss_type: Literal["mse", "cc", "ncc"]
+        Type of loss function. Must be 'mse' (mean square error), 'cc'
+        (cross correlation), or 'ncc' (normalized cross correlation).
+        Default is 'mse'.
+    b_factor: float
+        B-factor for filtering. Default is 500.
+    frequency_range: tuple[float, float]
+        Frequency range for filtering in Angstroms. First value must be
+        larger than the second value. Default is (300, 10).
+    """
+
+    patch_shape: tuple[PositiveInt, PositiveInt] = (1024, 1024)
+    loss_type: Literal["mse", "cc", "ncc"] = "mse"
+    b_factor: float = 500
+    frequency_range: tuple[PositiveFloat, PositiveFloat] = (300, 10)
 
     @field_validator("frequency_range")  # type: ignore[misc]
     @classmethod
@@ -99,3 +113,30 @@ class AlignmentConfig(BaseModelRIPPLE):
                 f"got {v[0]} <= {v[1]}"
             )
         return v
+
+
+class PolishParticlesConfig(BaseAlignmentConfig):
+    """Configuration for polishing particles.
+
+    This extends BaseAlignmentConfig with parameters specific to particle polishing.
+
+    Parameters
+    ----------
+    particle_df_path: str
+        Path to the refine config file.
+    loss_metric: Literal["mip", "scaled_mip"]
+        Metric to use for particle quality filtering. Must be 'mip' or 'scaled_mip'.
+        Default is 'scaled_mip'.
+    min_snr: float
+        Minimum value of the loss_metric for a particle to be considered.
+        Particles below this threshold will be excluded. Default is 0.
+    best_n: int
+        Maximum number of particles to use for optimization, selecting the top N
+        particles with the highest loss_metric values. Default is 10000000000
+        (essentially unlimited).
+    """
+
+    particle_df_path: str
+    loss_metric: Literal["mip", "scaled_mip"] = "scaled_mip"
+    min_snr: float = 0.0
+    best_n: PositiveInt = 10000000000

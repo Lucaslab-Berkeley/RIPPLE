@@ -5,7 +5,7 @@ import os
 from typing import Annotated, ClassVar
 
 import torch
-import yaml  # type: ignore
+import yaml
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.json_schema import SkipJsonSchema
 

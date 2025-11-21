@@ -8,7 +8,7 @@ from torch_motion_correction import (
     estimate_local_motion,
 )
 
-from .prepare_movie import prepare_movie
+from .prepare_movie import prepare_core
 
 if TYPE_CHECKING:
     from torch_motion_correction import OptimizationTracker
@@ -96,15 +96,15 @@ def core_align_frames(
         Tuple of
         (corrected_movie, updated_deformation_field, movie_prepared, trajectory).
     """
-    if optimizer_kwargs is None:
-        optimizer_kwargs = {"lr": 0.2}
-
-    if not skip_movie_preparation:
-        movie_prepared = prepare_movie(
-            movie, gain_map, dark_map, gain_flip, gain_rot, multiply_gain
-        )
-    else:
-        movie_prepared = movie
+    movie_prepared = prepare_core(
+        movie,
+        gain_map,
+        dark_map,
+        gain_flip,
+        gain_rot,
+        multiply_gain,
+        skip_movie_preparation,
+    )
     # estimate the motion
     if loss_trajectories:
         updated_deformation_field, trajectory = estimate_local_motion(

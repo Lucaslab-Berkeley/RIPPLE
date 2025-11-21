@@ -219,3 +219,47 @@ def set_frames_mean_zero(movie: torch.Tensor) -> torch.Tensor:
     print(f"  Completed mean zero correction for {n_frames} frames")
 
     return movie_mean_zero
+
+
+def prepare_core(
+    movie: torch.Tensor,
+    gain_map: torch.Tensor | None,
+    dark_map: torch.Tensor | None,
+    gain_flip: int,
+    gain_rot: int,
+    multiply_gain: bool,
+    skip_movie_preparation: bool,
+) -> torch.Tensor:
+    """
+    Prepare the movie for core processing functions.
+
+    Parameters
+    ----------
+    movie: torch.Tensor
+        The movie to prepare.
+    gain_map: torch.Tensor | None
+        The gain map to apply to the movie.
+    dark_map: torch.Tensor | None
+        The dark map to apply to the movie.
+    gain_flip: int
+        The flip to apply to the gain map.
+    gain_rot: int
+        The rotation to apply to the gain map.
+    multiply_gain: bool
+        Whether to multiply the movie by the gain map or divide the movie by the
+        gain map.
+    skip_movie_preparation: bool
+        Whether to skip the movie preparation step.
+
+    Returns
+    -------
+    torch.Tensor
+        The prepared movie, or the original movie if skip_movie_preparation is True.
+    """
+    if not skip_movie_preparation:
+        movie_prepared = prepare_movie(
+            movie, gain_map, dark_map, gain_flip, gain_rot, multiply_gain
+        )
+    else:
+        movie_prepared = movie
+    return movie_prepared

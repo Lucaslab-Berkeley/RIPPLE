@@ -9,6 +9,7 @@ import mrcfile
 import numpy as np
 import pandas as pd
 import torch
+import yaml
 from tifffile import TiffFile
 from torch_motion_correction import (
     read_deformation_field_from_csv,
@@ -270,3 +271,41 @@ def write_trajectory_to_csv(
         [{"step": cp.step, "loss": cp.loss} for cp in trajectory.checkpoints]
     )
     df.to_csv(file_path, index=False)
+
+
+def load_template_volume_from_config(
+    refine_config_path: str,
+) -> torch.Tensor:
+    """
+    Load the template volume from the refine config YAML file.
+
+    Parameters
+    ----------
+    refine_config_path : str
+        Path to the refine config YAML file.
+
+    Returns
+    -------
+    torch.Tensor
+        The template volume as a float32 tensor.
+    """
+    # Load the config YAML
+    with open(refine_config_path, encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+
+    # Get the template volume path
+    template_volume_path = config.get("template_volume_path")
+    if template_volume_path is None:
+        raise ValueError(
+            f"template_volume_path not found in config file: {refine_config_path}"
+        )
+
+    # Resolve relative paths relative to the config file location
+    config_dir = Path(refine_config_path).parent
+    if not Path(template_volume_path).is_absolute():
+        template_volume_path = str(config_dir / template_volume_path)
+
+    # Read MRC file and convert to float32 tensor
+    template_volume = read_mrc_to_tensor(template_volume_path)
+
+    return template_volume
