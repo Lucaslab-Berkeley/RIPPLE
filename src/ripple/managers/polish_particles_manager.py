@@ -93,6 +93,7 @@ class PolishParticlesManager(BaseModelRIPPLE):
         movie_extract: bool = True,
         particle_batch_size: int = 100,
         save_intermediate_fields: bool = False,
+        intermediate_fields_dir: str = ".",
     ) -> None:
         """Align the frames of a cryo-EM movie.
 
@@ -114,6 +115,8 @@ class PolishParticlesManager(BaseModelRIPPLE):
             Number of particles to process per batch for gradient accumulation.
         save_intermediate_fields: bool
             Whether to save the intermediate fields.
+        intermediate_fields_dir: str | None
+            Directory to save the intermediate fields.
         """
         (
             movie,
@@ -140,6 +143,7 @@ class PolishParticlesManager(BaseModelRIPPLE):
                 movie_extract=movie_extract,
                 particle_batch_size=particle_batch_size,
                 save_intermediate_fields=save_intermediate_fields,
+                intermediate_fields_dir=intermediate_fields_dir,
             )
         )
 

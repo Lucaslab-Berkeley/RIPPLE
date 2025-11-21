@@ -32,6 +32,7 @@ def main():
             movie_extract=True,
             particle_batch_size=102,
             save_intermediate_fields=True,
+            intermediate_fields_dir="../../example/def_fields",
         )
 
 

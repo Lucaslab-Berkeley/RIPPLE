@@ -56,6 +56,7 @@ def core_polish_particles(
     best_n: int = 10000000000,
     particle_batch_size: int = 102,
     save_intermediate_fields: bool = False,
+    intermediate_fields_dir: str = ".",
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, OptimizationTracker | None]:
     """
     Core function for polishing particles.
@@ -125,6 +126,8 @@ def core_polish_particles(
         Default is 100.
     save_intermediate_fields: bool
         Whether to save the intermediate fields.
+    intermediate_fields_dir: str
+        Directory to save the intermediate fields.
 
     Returns
     -------
@@ -164,6 +167,7 @@ def core_polish_particles(
         "min_snr": min_snr,
         "best_n": best_n,
         "save_intermediate_fields": save_intermediate_fields,
+        "intermediate_fields_dir": intermediate_fields_dir,
     }
 
     # estimate the motion
@@ -326,6 +330,7 @@ def estimate_local_motion_2dtm(
     min_snr: float = 0.0,
     best_n: int = 10000000000,
     save_intermediate_fields: bool = False,
+    intermediate_fields_dir: str = ".",
 ) -> torch.Tensor | tuple[torch.Tensor, OptimizationTracker]:
     """Estimate motion (new method).
 
@@ -381,6 +386,8 @@ def estimate_local_motion_2dtm(
         defaults.
     save_intermediate_fields: bool = False,
         Whether to save the intermediate fields.
+    intermediate_fields_dir: str
+        Directory to save the intermediate fields.
 
     Returns
     -------
@@ -475,7 +482,7 @@ def estimate_local_motion_2dtm(
         if save_intermediate_fields:
             write_deformation_field_to_csv(
                 new_deformation_field.data,
-                f"../../example/def_fields/new_deformation_field_{iter_idx}.csv",
+                f"{intermediate_fields_dir}/new_deformation_field_{iter_idx}.csv",
             )
         torch.cuda.empty_cache()
 
@@ -665,6 +672,7 @@ def estimate_local_motion_2dtm_particles(
     min_snr: float = 0.0,
     best_n: int = 10000000000,
     save_intermediate_fields: bool = False,
+    intermediate_fields_dir: str = ".",
 ) -> torch.Tensor | tuple[torch.Tensor, OptimizationTracker]:
     """Estimate motion (new method).
 
@@ -719,6 +727,8 @@ def estimate_local_motion_2dtm_particles(
         Maximum number of particles to use for the refinement. Default is 10000000000.
     save_intermediate_fields: bool
         Whether to save the intermediate fields.
+    intermediate_fields_dir: str
+        Directory to save the intermediate fields.
 
     Returns
     -------
@@ -820,7 +830,7 @@ def estimate_local_motion_2dtm_particles(
             if save_intermediate_fields:
                 write_deformation_field_to_csv(
                     deformation_field.data,
-                    f"../../example/def_fields/particle_deformation_field_{iter_idx}.csv",
+                    f"{intermediate_fields_dir}/particle_deformation_field_{iter_idx}.csv",
                 )
 
             torch.cuda.empty_cache()
