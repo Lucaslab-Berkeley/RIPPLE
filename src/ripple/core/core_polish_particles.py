@@ -476,7 +476,6 @@ def estimate_local_motion_2dtm(
 
     # "Training" loop going over all patched n_iterations times
     pbar = tqdm.tqdm(range(n_iterations))
-    all_losses = []
 
     for iter_idx in pbar:
         if save_intermediate_fields:
@@ -545,7 +544,6 @@ def estimate_local_motion_2dtm(
 
         loss = -torch.mean(loss_tensor)
         print(f"loss: {loss}")
-        all_losses.append(loss.item())
 
         motion_optimizer.zero_grad()
 
@@ -575,7 +573,7 @@ def estimate_local_motion_2dtm(
 
     if return_trajectory:
         return final_deformation_field, trajectory
-    return final_deformation_field, all_losses
+    return final_deformation_field
 
 
 # pylint: disable=too-many-locals
@@ -812,7 +810,6 @@ def estimate_local_motion_2dtm_particles(
 
     # "Training" loop going over all patched n_iterations times
     pbar = tqdm.tqdm(range(n_iterations))
-    all_losses = []
 
     # Create batch configs once before optimization loop
     # This will work with the already-filtered CSV
@@ -939,7 +936,6 @@ def estimate_local_motion_2dtm_particles(
             # Now take the optimizer step with accumulated gradients from all batches
             motion_optimizer.step()
             print(f"accumulated_loss: {accumulated_loss}")
-            all_losses.append(accumulated_loss)
 
             # log loss
             if iter_idx % 1 == 0:
@@ -963,7 +959,7 @@ def estimate_local_motion_2dtm_particles(
 
     if return_trajectory:
         return final_deformation_field, trajectory
-    return final_deformation_field, all_losses
+    return final_deformation_field
 
 
 def _make_differentiable_refine_manager(
