@@ -42,6 +42,13 @@ class PolishParticlesManager(BaseModelRIPPLE):
     ) -> dict[str, Any]:
         """Setup the backend kwargs for the align frames manager."""
         loss_trajectories = self.output_config.loss_trajectories_output_path is not None
+        if loss_trajectories:
+            trajectory_kwargs = {
+                "sample_every_n_steps": 1,
+                "total_steps": self.alignment_config.n_iterations,
+            }
+        else:
+            trajectory_kwargs = None
         optimizer_kwargs = {"lr": self.alignment_config.learning_rate}
         if optimizer_kwargs is None:
             optimizer_kwargs = {"lr": 0.2}
@@ -74,6 +81,7 @@ class PolishParticlesManager(BaseModelRIPPLE):
             "skip_movie_preparation": self.alignment_config.skip_movie_preparation,
             "n_iterations": self.alignment_config.n_iterations,
             "optimizer_kwargs": optimizer_kwargs,
+            "trajectory_kwargs": trajectory_kwargs,
             "grid_type": self.alignment_config.grid_type,
             "voltage": voltage,
             "device": self.computational_config.gpu_id,
