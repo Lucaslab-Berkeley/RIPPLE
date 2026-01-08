@@ -47,10 +47,10 @@ output_config:
   allow_file_overwrite: true
   
   # Optional: Path to save dose-weighted sum output (.mrc)
-  dw_sum_output_path: ../../example/output/dw_sum_polished.mrc
+  dw_sum_output_path: ../../example/output/dw_sum_polished_laplacian_10x10.mrc
   
   # Optional: Path to save deformation field output
-  deformation_field_output_path: ../../example/output/def_field_polished.csv
+  deformation_field_output_path: ../../example/output/def_field_polished_laplacian_10x10.csv
   
   # Optional: Path to save motion-corrected movie output (.mrc)
   motion_corrected_movie_output_path: null
@@ -62,19 +62,19 @@ output_config:
   non_dw_sum_output_path: null
   
   # Optional: Path to save loss trajectories output (.csv)
-  loss_trajectories_output_path: null
+  loss_trajectories_output_path: ../../example/output/loss_trajectories-laplacian_10x10.csv
 
 alignment_config:
   # Required: Resolution of deformation field in pixels (x, y, z)
   # Example: [54, 4, 4] for 54 frames, 4x4 grid
-  deformation_field_resolution: [54, 4, 4]
+  deformation_field_resolution: [54, 20, 20]
   
   # Optional: Path to initial deformation field file
   # If not provided, deformation field will be initialized to zero
   deformation_field_path: ../../example/output/def_field.csv
   
   # Number of optimization iterations (default: 100)
-  n_iterations: 100
+  n_iterations: 50
   
   # Type of interpolation grid: "catmull_rom" or "bspline" (default: "catmull_rom")
   grid_type: "catmull_rom"
@@ -102,4 +102,18 @@ alignment_config:
   # Maximum number of best particles to use for optimization (default: 10000000000)
   # Only the top N particles with highest loss_metric values will be selected
   best_n: 10000000000
+
+  # Sigma optimization settings (optional)
+  # Set optimize_sigmas: true to tune prior hyperparameters using a validation template
+  optimize_sigmas: false
+  
+  # Path to validation template (.mrc) - required if optimize_sigmas is true
+  # Should be different from training template to prevent overfitting
+  validation_template_path: null
+  
+  # Number of outer loop iterations for sigma optimization (default: 20)
+  sigma_iterations: 20
+  
+  # Number of inner loop motion iterations per sigma update (default: 10)
+  motion_iterations: 10
 

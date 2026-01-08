@@ -134,9 +134,28 @@ class PolishParticlesConfig(BaseAlignmentConfig):
         Maximum number of particles to use for optimization, selecting the top N
         particles with the highest loss_metric values. Default is 10000000000
         (essentially unlimited).
+    optimize_sigmas: bool
+        Whether to optimize sigma hyperparameters using a validation template.
+        Default is False.
+    validation_template_path: str | None
+        Path to validation template (.mrc) for sigma optimization.
+        Required if optimize_sigmas is True.
+    sigma_iterations: int
+        Number of outer loop iterations for sigma optimization. Default is 20.
+    motion_iterations: int
+        Number of inner loop motion iterations per sigma update. Default is 10.
     """
 
     particle_df_path: str
     loss_metric: Literal["mip", "scaled_mip"] = "scaled_mip"
     min_snr: float = 0.0
     best_n: PositiveInt = 10000000000
+    optimize_sigmas: bool = False
+    validation_template_path: str | None = None
+    sigma_iterations: PositiveInt = 20
+    motion_iterations: PositiveInt = 10
+    # Output paths for sigma optimization results
+    optimized_sigmas_output_path: str | None = None
+    sigma_history_output_path: str | None = None
+    training_history_output_path: str | None = None
+    validation_history_output_path: str | None = None

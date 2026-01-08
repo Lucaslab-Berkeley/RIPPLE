@@ -140,6 +140,7 @@ class PolishParticlesManager(BaseModelRIPPLE):
             dark_map,
             deformation_field,
         )
+        
         core_kwargs = self.setup_backend_kwargs(
             movie, gain_map, dark_map, deformation_field
         )
@@ -152,6 +153,16 @@ class PolishParticlesManager(BaseModelRIPPLE):
                 particle_batch_size=particle_batch_size,
                 save_intermediate_fields=save_intermediate_fields,
                 intermediate_fields_dir=intermediate_fields_dir,
+                # Sigma optimization parameters
+                optimize_sigmas=self.alignment_config.optimize_sigmas,
+                validation_template_path=self.alignment_config.validation_template_path,
+                sigma_iterations=self.alignment_config.sigma_iterations,
+                motion_iterations=self.alignment_config.motion_iterations,
+                # Sigma optimization output paths
+                optimized_sigmas_output_path=self.alignment_config.optimized_sigmas_output_path,
+                sigma_history_output_path=self.alignment_config.sigma_history_output_path,
+                training_history_output_path=self.alignment_config.training_history_output_path,
+                validation_history_output_path=self.alignment_config.validation_history_output_path,
             )
         )
 

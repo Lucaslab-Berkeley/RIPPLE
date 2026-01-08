@@ -45,7 +45,7 @@ class BaseModelRIPPLE(BaseModel):
 
     @classmethod
     def from_json(cls, json_path: str | os.PathLike) -> "BaseModelRIPPLE":
-        """Load a MatchTemplateManager from a serialized JSON file.
+        """Load a BaseModelRIPPLE subclass from a serialized JSON file.
 
         Parameters
         ----------
