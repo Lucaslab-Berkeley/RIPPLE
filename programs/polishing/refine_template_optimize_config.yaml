@@ -1,0 +1,37 @@
+###################################################
+### RefineTemplateManager configuration example ###
+###################################################
+# An example YAML configuration to modify.
+# Call `RefineTemplateManager.from_yaml(path)` to load this configuration.
+template_volume_path: ../../example/maps/60S_map_px0.936_bscale0.5_intro_DW_outside_75A.mrc
+particle_stack:
+  df_path: ../../example/refine_results/results_refine_template_DW_ttMotioncor.csv # Needs to be readable by pandas
+  extracted_box_size: [528, 528]
+  original_template_size: [512, 512]
+defocus_refinement_config:
+  enabled: false
+orientation_refinement_config:
+  enabled: false
+pixel_size_refinement_config:
+  enabled: false
+preprocessing_filters:
+  whitening_filter:
+    do_power_spectrum: true
+    enabled: true
+    max_freq: 1.0  # In terms of Nyquist frequency
+    num_freq_bins: null
+  bandpass_filter:
+    enabled: false
+    falloff: null
+    high_freq_cutoff: null
+    low_freq_cutoff: null
+computational_config:
+  gpu_ids: 0
+  num_cpus: 1
+apply_global_filtering: false
+movie_config:
+  enabled: true
+  movie_path: path/to/aligned_movie.mrc
+  deformation_field_path: path/to/deformation_field.csv
+  pre_exposure: 0.0
+  fluence_per_frame: 1.0

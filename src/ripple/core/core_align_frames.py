@@ -96,6 +96,7 @@ def core_align_frames(
         Tuple of
         (corrected_movie, updated_deformation_field, movie_prepared, trajectory).
     """
+    torch.set_grad_enabled(True)
     movie_prepared = prepare_core(
         movie,
         gain_map,

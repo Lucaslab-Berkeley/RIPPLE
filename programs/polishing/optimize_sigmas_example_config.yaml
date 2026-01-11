@@ -1,0 +1,132 @@
+# Alignment Movies Configuration File
+# This config file contains all settings for running the align frames manager
+
+computational_config:
+  # GPU/CPU device to use
+  # Can be an integer (e.g., 0 for GPU 0), a string like "cuda:0", or "cpu"
+  gpu_id: 2
+
+movie_config:
+  # Required: Path to the movie file (.mrc, .tif, or .eer)
+  movie_path: "movies/my_movie.eer"
+  
+  # Required: Pixel size in Angstroms per pixel
+  pixel_size: 0.936
+  
+  # Required: Total fluence in electrons per Angstrom^2
+  fluence: 54.5
+  
+  # Required: Fluence per frame in electrons per Angstrom^2/frame
+  fluence_per_frame: 1.0
+  
+  # Pre-exposure time in seconds (default: 0.0)
+  pre_exposure: 0.0
+  
+  # Accelerating voltage in kilovolts (default: 300.0)
+  voltage: 300.0
+  
+  # Optional: Path to gain map file (.mrc, .tif, .tiff, or .gain)
+  # If not provided, gain map will be set to None
+  gain_path: null
+  
+  # Optional: Path to dark map file (.mrc, .tif, .tiff, or .dark)
+  # If not provided, dark map will be set to None
+  dark_path: null
+  
+  # Gain flip: 0 = no flip, 1 = flipY, 2 = flipX (default: 0)
+  gain_flip: 0
+  
+  # Gain rotation: 0 = no rotation, 1 = 90°, 2 = 180°, 3 = 270° (default: 0)
+  gain_rot: 0
+  
+  # Whether to multiply movie by gain map (True) or divide (False) (default: True)
+  multiply_gain: true
+
+output_config:
+  # Whether to allow overwriting existing output files (default: true)
+  allow_file_overwrite: true
+  
+  # Optional: Path to save dose-weighted sum output (.mrc)
+  dw_sum_output_path: ../../example/output/dw_sum_polished_laplacian_10x10.mrc
+  
+  # Optional: Path to save deformation field output
+  deformation_field_output_path: ../../example/output/def_field_polished_laplacian_10x10.csv
+  
+  # Optional: Path to save motion-corrected movie output (.mrc)
+  motion_corrected_movie_output_path: null
+  
+  # Optional: Path to save rendered (unaligned) movie output (.mrc)
+  rendered_movie_output_path: null
+  
+  # Optional: Path to save non-dose-weighted sum output (.mrc)
+  non_dw_sum_output_path: null
+  
+  # Optional: Path to save loss trajectories output (.csv)
+  loss_trajectories_output_path: ../../example/output/loss_trajectories-laplacian_10x10.csv
+
+alignment_config:
+  # Required: Resolution of deformation field in pixels (x, y, z)
+  # Example: [54, 4, 4] for 54 frames, 4x4 grid
+  deformation_field_resolution: [54, 20, 20]
+  
+  # Optional: Path to initial deformation field file
+  # If not provided, deformation field will be initialized to zero
+  deformation_field_path: ../../example/output/def_field.csv
+  
+  # Number of optimization iterations (default: 100)
+  n_iterations: 50
+  
+  # Type of interpolation grid: "catmull_rom" or "bspline" (default: "catmull_rom")
+  grid_type: "catmull_rom"
+    
+  # Type of optimizer: "adam" only for now (default: "adam")
+  optimizer_type: "adam"
+  
+  # Learning rate for optimization (default: 0.2)
+  learning_rate: 0.2
+
+  # Whether to skip movie preparation step (default: false)
+  # Set to true for subsequent passes after initial alignment
+  skip_movie_preparation: false
+
+  # Path to refine config file
+  particle_df_path: "refine_template_optimize_config.yaml"
+  
+  # Metric to use for particle quality filtering: "mip" or "scaled_mip" (default: "scaled_mip")
+  loss_metric: "scaled_mip"
+  
+  # Minimum value of loss_metric for a particle to be considered (default: 0)
+  # Particles below this threshold will be excluded from optimization
+  min_snr: 0.0
+  
+  # Maximum number of best particles to use for optimization (default: 10000000000)
+  # Only the top N particles with highest loss_metric values will be selected
+  best_n: 10000000000
+
+  # Sigma optimization settings (optional)
+  # Set optimize_sigmas: true to tune prior hyperparameters using a validation template
+  optimize_sigmas: true
+  
+  # Path to validation template (.mrc) - required if optimize_sigmas is true
+  # Should be different from training template to prevent overfitting
+  validation_template_path: ../../example/maps/60S_map_px0.936_bscale0.5_intro_DW_inside_75A.mrc
+  
+  # Number of outer loop iterations for sigma optimization (default: 20)
+  sigma_iterations: 20
+  
+  # Number of inner loop motion iterations per sigma update (default: 10)
+  motion_iterations: 15
+  
+  # Output paths for sigma optimization results (optional)
+  # Final optimized sigma values as JSON
+  optimized_sigmas_output_path: ../../example/output/optimized_sigmas_neldermead.json
+  
+  # Full sigma history (values at each iteration) as JSON
+  sigma_history_output_path: ../../example/output/sigma_history_neldermead.json
+  
+  # Training loss history as JSON
+  training_history_output_path: ../../example/output/training_history_neldermead.json
+  
+  # Validation loss history as JSON
+  validation_history_output_path: ../../example/output/validation_history_neldermead.json
+
