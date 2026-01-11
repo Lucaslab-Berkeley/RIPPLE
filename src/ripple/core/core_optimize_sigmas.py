@@ -1,30 +1,31 @@
-"""Optimization functions for sigma parameter tuning."""
+"""Core functions for optimizing sigma hyperparameters."""
 
-import itertools
+import gc
+import json
 import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Literal
-import time
-import einops
+
+import mrcfile
 import numpy as np
 import optuna
 import pandas as pd
-import torch
-import tqdm
-import yaml
 from scipy.optimize import minimize
-from leopard_em.pydantic_models.managers import DifferentiableRefineManager
-from torch_cubic_spline_grids import CubicBSplineGrid3d, CubicCatmullRomGrid3d
-from torch_motion_correction import correct_motion, correct_motion_two_grids
-from torch_motion_correction.data_io import write_deformation_field_to_csv
-from torch_motion_correction.deformation_field_utils import resample_deformation_field
-from torch_motion_correction.optimization_state import OptimizationTracker
-from ripple.utils.data_io import load_template_volume_from_config
-from .generate_image import dose_weight_memory_efficient
-from .prepare_movie import prepare_core
-from .motion_priors import (
+import torch
+from torch_cubic_spline_grids import CubicCatmullRomGrid3d
+from torch_motion_correction.deformation_field_utils import (
+    resample_deformation_field,
+)
+import tqdm
 
+from ripple.utils.data_io import load_template_volume_from_config
+
+from .core_polish_particles import (
+    _create_batch_configs,
+    _filter_particles_by_quality,
+    _make_differentiable_refine_manager,
+)
 from .motion_priors import (
     _build_physical_coords,
     _compute_physical_spacing,
@@ -33,230 +34,220 @@ from .motion_priors import (
     laplacian_compute,
     relion2019_compute,
 )
-from ripple.utils.data_io import load_template_volume_from_config
-from torch_cubic_spline_grids import CubicCatmullRomGrid3d
-from torch_motion_correction.deformation_field_utils import resample_deformation_field
-
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
-def _filter_particles_by_quality(
+def core_optimize_sigmas(
+    optimize_algorithm: Literal["gradient", "nelder-mead", "bayesian"],
+    image: torch.Tensor,  # (t, H, W)
+    var_image: torch.Tensor,
+    mean_image: torch.Tensor,
+    pixel_spacing: float,
+    deformation_field_resolution: tuple[int, int, int],  # (nt, nh, nw)
+    initial_deformation_field: torch.Tensor | None,  # (yx, nt, nh, nw)
     refine_config_path: str,
-    particle_indices: list[pd.Index] | None,
+    validation_template_path: str,
+    pre_exposure: float = 0.0,
+    fluence_per_frame: float = 1.0,
+    motion_iterations: int = 10,
+    sigma_iterations: int = 20,
+    optimizer_kwargs: dict[str, Any] | None = None,
+    sigma_optimizer_kwargs: dict[str, Any] | None = None,
+    correlation_batch_size: int = 20,
+    particle_batch_size: int = 102,
+    particle_indices: pd.Index = None,
+    device: torch.device = None,
     loss_metric: str = "scaled_mip",
     min_snr: float = 0.0,
     best_n: int = 10000000000,
-    temp_dir: Path | None = None,
-) -> tuple[str, list[pd.Index]]:
-    """
-    Filter particles based on quality metrics and create a temporary config/CSV.
-
+    prior_type: str = "relion",
+    init_sigma_A: float = 0.513517,
+    init_alpha_spatial: float = 1e5,
+    init_sigma_A_amplitude: float = 2.0,
+    init_sigma_A_decay: float = 0.1,
+    init_sigma_A_offset: float = 1.0,
+    sigma_A_exponential: bool = False,
+    init_sigma_D: float = 5782.376953,
+    init_sigma_V: float = 0.194826,
+    optimize_sigma_A: bool = True,
+    optimize_alpha_spatial: bool = True,
+    optimize_sigma_A_amplitude: bool = True,
+    optimize_sigma_A_decay: bool = True,
+    optimize_sigma_A_offset: bool = True,
+    optimize_sigma_D: bool = True,
+    optimize_sigma_V: bool = True,
+    verbose: bool = True,
+    # Output paths for saving results
+    optimized_sigmas_output_path: str | None = None,
+    sigma_history_output_path: str | None = None,
+    training_history_output_path: str | None = None,
+    validation_history_output_path: str | None = None,
+) -> dict[str, Any]:
+    """Dispatcher function to choose and run the appropriate sigma optimization
+    algorithm.
+    
     Parameters
     ----------
+    optimize_algorithm : Literal["gradient", "nelder-mead", "bayesian"]
+        Algorithm to use for sigma optimization:
+        - 'gradient': Gradient-based optimization using Adam
+        - 'nelder-mead': Nelder-Mead (simplex) method
+        - 'bayesian': Bayesian optimization using Optuna
+    image : torch.Tensor
+        (t, H, W) movie to estimate motion from
+    var_image : torch.Tensor
+        (t, H, W) variance image
+    mean_image : torch.Tensor
+        (t, H, W) mean image
+    pixel_spacing : float
+        Pixel spacing in Angstroms
+    deformation_field_resolution : tuple[int, int, int]
+        Resolution of deformation field (nt, nh, nw)
+    initial_deformation_field : torch.Tensor | None
+        Initial deformation field (2, nt, nh, nw) or None
     refine_config_path : str
-        Path to the refine config YAML file.
-    particle_indices : list[pd.Index] | None
-        Original particle indices to filter, or None to load all from CSV.
-    loss_metric : str
-        Metric column name to use for filtering ('mip' or 'scaled_mip').
-    min_snr : float
-        Minimum value of the loss_metric for a particle to be considered.
-    best_n : int
-        Maximum number of particles to use, selecting the top N by loss_metric.
-    temp_dir : Path | None
-        Temporary directory to use. If None, returns original config and indices.
-
-    Returns
-    -------
-    tuple[str, list[pd.Index]]
-        - Path to filtered config YAML (or original if no filtering needed)
-        - Filtered particle indices as list[pd.Index] with shape (1, n_filtered)
-    """
-    # Load the YAML config to get the CSV path
-    with open(refine_config_path, encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-
-    csv_path = config["particle_stack"]["df_path"]
-
-    # Resolve relative paths
-    config_dir = Path(refine_config_path).parent
-    if not Path(csv_path).is_absolute():
-        csv_path = str(config_dir / csv_path)
-
-    # Load the particle dataframe
-    df = pd.read_csv(csv_path, index_col=0)
-
-    # If particle_indices provided, filter df to only those indices
-    if particle_indices is not None and len(particle_indices) > 0:
-        df = df.loc[particle_indices[0]]
-
-    # Filter by minimum SNR if the metric column exists
-    needs_filtering = False
-    if loss_metric in df.columns:
-        df_filtered = df[df[loss_metric] >= min_snr]
-
-        # Select top best_n particles by loss_metric (highest values)
-        if len(df_filtered) > best_n:
-            df_filtered = df_filtered.nlargest(best_n, loss_metric)
-
-        needs_filtering = len(df_filtered) < len(df)
-
-        print(
-            f"Filtered particles: {len(df)} -> {len(df_filtered)} "
-            f"(min_{loss_metric}={min_snr}, best_n={best_n})"
-        )
-    else:
-        print(f"Warning: '{loss_metric}' column not found in CSV. Using all particles.")
-        df_filtered = df
-
-    # If no filtering needed or no temp_dir provided, return original config
-    if not needs_filtering or temp_dir is None:
-        return refine_config_path, [df_filtered.index]
-
-    # Create temporary filtered CSV
-    filtered_csv_path = temp_dir / "filtered_particles.csv"
-    df_filtered.to_csv(filtered_csv_path)
-
-    # Create new config pointing to filtered CSV with absolute paths
-    filtered_config = config.copy()
-    filtered_config["particle_stack"] = config["particle_stack"].copy()
-    filtered_config["particle_stack"]["df_path"] = str(filtered_csv_path)
-
-    # Resolve template_volume_path to absolute
-    if "template_volume_path" in filtered_config:
-        template_path = Path(config["template_volume_path"])
-        if not template_path.is_absolute():
-            template_path = (config_dir / template_path).resolve()
-        filtered_config["template_volume_path"] = str(template_path)
-
-    filtered_config_path = temp_dir / "filtered_config.yaml"
-    with open(filtered_config_path, "w", encoding="utf-8") as f:
-        yaml.dump(filtered_config, f)
-
-    # Return indices starting from 0 to match the new CSV
-    filtered_indices = pd.Index(range(len(df_filtered)))
-    return str(filtered_config_path), [filtered_indices]
-
-
-# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
-
-# pylint: disable=too-many-locals
-def _create_batch_configs(
-    refine_config_path: str,
-    particle_batch_size: int,
-    temp_dir: Path,
-) -> tuple[list[str], list[list[pd.Index]]]:
-    """
-    Split the particle CSV into batches and create temporary config files.
-
-    Parameters
-    ----------
-    refine_config_path : str
-        Path to the original refine config YAML file.
+        Path to refine config (training template)
+    validation_template_path : str
+        Path to validation template (.mrc) for computing validation loss
+    pre_exposure : float
+        Pre-exposure time in seconds. Default 0.0
+    fluence_per_frame : float
+        Fluence per frame in e/Å². Default 1.0
+    motion_iterations : int
+        Motion optimization iterations per sigma update. Default 10
+    sigma_iterations : int
+        Number of sigma optimization iterations/trials. Default 20
+    optimizer_kwargs : dict
+        Kwargs for motion optimizer. Default {"lr": 0.2}
+    sigma_optimizer_kwargs : dict
+        Kwargs for sigma optimizer (only used for gradient method)
+    correlation_batch_size : int
+        Batch size for correlation computation. Default 20
     particle_batch_size : int
-        Number of particles per batch.
-    temp_dir : Path
-        Temporary directory to store batch configs and CSVs.
+        Batch size for particles. Default 102
+    particle_indices : pd.Index
+        Particle indices to use. Default None (all particles)
+    device : torch.device
+        Device to use. Default None (auto-detect)
+    loss_metric : str
+        Loss metric: "scaled_mip" or "cross_correlation". Default "scaled_mip"
+    min_snr : float
+        Minimum SNR threshold. Default 0.0
+    best_n : int
+        Maximum number of best particles to use. Default 10000000000
+    prior_type : str
+        "laplacian" or "relion". Default "relion"
+    init_sigma_A : float
+        Initial sigma_A (constant mode). Default 0.513517
+    init_alpha_spatial : float
+        Initial alpha_spatial. Default 1e5
+    init_sigma_A_amplitude : float
+        Initial A in exponential. Default 2.0
+    init_sigma_A_decay : float
+        Initial B in exponential. Default 0.1
+    init_sigma_A_offset : float
+        Initial C in exponential. Default 1.0
+    sigma_A_exponential : bool
+        Use exponential sigma_A. Default False
+    init_sigma_D : float
+        Initial sigma_D. Default 5782.376953
+    init_sigma_V : float
+        Initial sigma_V. Default 0.194826
+    optimize_sigma_A : bool
+        Whether to optimize sigma_A. Default True
+    optimize_alpha_spatial : bool
+        Whether to optimize alpha_spatial. Default True
+    optimize_sigma_A_amplitude : bool
+        Whether to optimize sigma_A_amplitude. Default True
+    optimize_sigma_A_decay : bool
+        Whether to optimize sigma_A_decay. Default True
+    optimize_sigma_A_offset : bool
+        Whether to optimize sigma_A_offset. Default True
+    optimize_sigma_D : bool
+        Whether to optimize sigma_D. Default True
+    optimize_sigma_V : bool
+        Whether to optimize sigma_V. Default True
+    verbose : bool
+        Print progress. Default True
+    optimized_sigmas_output_path : str | None
+        Path to save final optimized sigmas as JSON. Default None
+    sigma_history_output_path : str | None
+        Path to save sigma history (all iterations) as JSON. Default None
+    training_history_output_path : str | None
+        Path to save training loss history as JSON. Default None
+    validation_history_output_path : str | None
+        Path to save validation loss history as JSON. Default None
 
     Returns
     -------
-    tuple[list[str], list[list[pd.Index]]]
-        - List of paths to batch config YAML files
-        - List of batch particle indices.
-        Each as list[pd.Index] with shape (1, n_particles_in_batch)
+    dict
+        - "optimized_sigmas": dict of optimized sigma values
+        - "final_deformation_field": final deformation field
+        - "validation_loss_history": list of validation losses
+        - "training_loss_history": list of training losses
+        - "sigma_history": list of sigma values at each iteration
     """
-    # Load the original config
-    with open(refine_config_path, encoding="utf-8") as f:
-        config = yaml.safe_load(f)
+    common_kwargs = {
+        "image": image,
+        "var_image": var_image,
+        "mean_image": mean_image,
+        "pixel_spacing": pixel_spacing,
+        "deformation_field_resolution": deformation_field_resolution,
+        "initial_deformation_field": initial_deformation_field,
+        "refine_config_path": refine_config_path,
+        "validation_template_path": validation_template_path,
+        "pre_exposure": pre_exposure,
+        "fluence_per_frame": fluence_per_frame,
+        "motion_iterations": motion_iterations,
+        "optimizer_kwargs": optimizer_kwargs,
+        "sigma_optimizer_kwargs": sigma_optimizer_kwargs,
+        "correlation_batch_size": correlation_batch_size,
+        "particle_batch_size": particle_batch_size,
+        "particle_indices": particle_indices,
+        "device": device,
+        "loss_metric": loss_metric,
+        "min_snr": min_snr,
+        "best_n": best_n,
+        "prior_type": prior_type,
+        "init_sigma_A": init_sigma_A,
+        "init_alpha_spatial": init_alpha_spatial,
+        "init_sigma_A_amplitude": init_sigma_A_amplitude,
+        "init_sigma_A_decay": init_sigma_A_decay,
+        "init_sigma_A_offset": init_sigma_A_offset,
+        "sigma_A_exponential": sigma_A_exponential,
+        "init_sigma_D": init_sigma_D,
+        "init_sigma_V": init_sigma_V,
+        "optimize_sigma_A": optimize_sigma_A,
+        "optimize_alpha_spatial": optimize_alpha_spatial,
+        "optimize_sigma_A_amplitude": optimize_sigma_A_amplitude,
+        "optimize_sigma_A_decay": optimize_sigma_A_decay,
+        "optimize_sigma_A_offset": optimize_sigma_A_offset,
+        "optimize_sigma_D": optimize_sigma_D,
+        "optimize_sigma_V": optimize_sigma_V,
+        "verbose": verbose,
+        "optimized_sigmas_output_path": optimized_sigmas_output_path,
+        "sigma_history_output_path": sigma_history_output_path,
+        "training_history_output_path": training_history_output_path,
+        "validation_history_output_path": validation_history_output_path,
+    }
 
-    # Get base directory of original config for resolving relative paths
-    config_base_dir = Path(refine_config_path).parent.resolve()
-
-    def resolve_path(path_str: str | None) -> str | None:
-        """Resolve a path relative to the original config directory."""
-        if path_str is None:
-            return None
-        path = Path(path_str)
-        if not path.is_absolute():
-            path = (config_base_dir / path).resolve()
-        return str(path)
-
-    # Get the CSV path from config and resolve it
-    original_csv_path = resolve_path(config["particle_stack"]["df_path"])
-
-    # Load the full particle dataframe
-    df = pd.read_csv(original_csv_path, index_col=0)
-    n_particles = len(df)
-    n_batches = (n_particles + particle_batch_size - 1) // particle_batch_size
-
-    batch_config_paths = []
-    batch_particle_indices = []
-
-    for batch_idx in range(n_batches):
-        start_idx = batch_idx * particle_batch_size
-        end_idx = min((batch_idx + 1) * particle_batch_size, n_particles)
-
-        # Create batch dataframe
-        batch_df = df.iloc[start_idx:end_idx]
-
-        # Save batch CSV (this will have row indices 0 to len(batch_df)-1)
-        batch_csv_path = temp_dir / f"batch_{batch_idx}_particles.csv"
-        batch_df.to_csv(batch_csv_path)
-
-        # Create batch particle indices
-        # Each batch has indices from 0 to n_particles_in_batch
-        batch_size = end_idx - start_idx
-        batch_indices = pd.Index(range(batch_size))
-        batch_particle_indices.append([batch_indices])
-
-        # Create batch config with absolute paths
-        batch_config = config.copy()
-        batch_config["particle_stack"] = config["particle_stack"].copy()
-        batch_config["particle_stack"]["df_path"] = str(batch_csv_path)
-
-        # Resolve template_volume_path to absolute
-        if "template_volume_path" in batch_config:
-            batch_config["template_volume_path"] = resolve_path(
-                config["template_volume_path"]
-            )
-
-        # Save batch config
-        batch_config_path = temp_dir / f"batch_{batch_idx}_config.yaml"
-        with open(batch_config_path, "w", encoding="utf-8") as f:
-            yaml.dump(batch_config, f)
-
-        batch_config_paths.append(str(batch_config_path))
-
-    return batch_config_paths, batch_particle_indices
+    if optimize_algorithm == "gradient":
+        return optimize_sigmas_2dtm_gradient(
+            sigma_iterations=sigma_iterations,
+            **common_kwargs,
+        )
+    elif optimize_algorithm == "nelder-mead":
+        return optimize_sigmas_2dtm_nelder_mead(
+            sigma_iterations=sigma_iterations,
+            **common_kwargs,
+        )
+    elif optimize_algorithm == "bayesian":
+        return optimize_sigmas_2dtm_optuna(
+            n_trials=sigma_iterations,
+            **common_kwargs,
+        )
 
 
-# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
-
-
-def _make_differentiable_refine_manager(
-    refine_config_path: str,
-) -> DifferentiableRefineManager:
-    """
-    Make a differentiable refine manager from a particle results path.
-
-    Parameters
-    ----------
-    refine_config_path: str
-        Path to the refine config file.
-
-    Returns
-    -------
-    DifferentiableRefineManager
-        The differentiable refine manager.
-    """
-    refine_manager = DifferentiableRefineManager.from_yaml(refine_config_path)
-    # override the movie_params here
-    refine_manager.movie_config.enabled = False
-    return refine_manager
-
-# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
-
-# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
-def optimize_sigmas_2dtm_bayesian(
+def optimize_sigmas_2dtm_gradient(
     image: torch.Tensor,  # (t, H, W)
     var_image: torch.Tensor,
     mean_image: torch.Tensor,
@@ -295,8 +286,8 @@ def optimize_sigmas_2dtm_bayesian(
     optimize_sigma_D: bool = True,
     optimize_sigma_V: bool = True,
     # Anti-local-minima strategies
-    perturbation_interval: int = 0,  # 0 = disabled, otherwise perturb every N iterations
-    perturbation_scale: float = 0.1,  # Relative scale of random perturbation (0.1 = 10%)
+    perturbation_interval: int = 0,  # 0 = disabled, otherwise perturb every N
+    perturbation_scale: float = 0.1,  # Relative scale of random perturbation
     verbose: bool = True,
     # Output paths for saving results
     optimized_sigmas_output_path: str | None = None,
@@ -305,13 +296,13 @@ def optimize_sigmas_2dtm_bayesian(
     validation_history_output_path: str | None = None,
 ) -> dict[str, Any]:
     """Optimize prior hyperparameters using a validation template.
-    
+
     Performs bi-level optimization:
     1. Inner loop: Run motion estimation for motion_iterations with current sigmas
     2. Outer loop: Evaluate with validation template and update sigmas
-    
+
     The validation template prevents overfitting of the prior parameters.
-    
+
     Parameters
     ----------
     image : torch.Tensor
@@ -362,7 +353,7 @@ def optimize_sigmas_2dtm_bayesian(
         Path to save training loss history as JSON. Default None
     validation_history_output_path : str | None
         Path to save validation loss history as JSON. Default None
-        
+
     Returns
     -------
     dict
@@ -372,11 +363,9 @@ def optimize_sigmas_2dtm_bayesian(
         - "training_loss_history": list of training losses
         - "sigma_history": list of sigma values at each iteration
     """
-    import mrcfile
-    
     torch.set_grad_enabled(True)
     temp_dir = Path(tempfile.mkdtemp(prefix="ripple_sigma_opt_"))
-    
+
     refine_config_path, particle_indices = _filter_particles_by_quality(
         refine_config_path=refine_config_path,
         particle_indices=particle_indices,
@@ -385,15 +374,18 @@ def optimize_sigmas_2dtm_bayesian(
         best_n=best_n,
         temp_dir=temp_dir,
     )
-    
+
     with mrcfile.open(validation_template_path, mode='r') as mrc:
-        validation_template = torch.tensor(mrc.data.copy(), device=device, dtype=torch.float32)
-    
+        validation_template = torch.tensor(
+            mrc.data.copy(), device=device, dtype=torch.float32
+        )
+    template_volume = load_template_volume_from_config(refine_config_path)
+
     if optimizer_kwargs is None:
         optimizer_kwargs = {"lr": 0.2}
     if sigma_optimizer_kwargs is None:
         sigma_optimizer_kwargs = {"lr": 0.2}
-    
+
     # Default per-parameter learning rate multipliers (relative to base lr)
     # Large-scale params need larger lr, small-scale params need smaller lr
     default_lr_multipliers = {
@@ -405,19 +397,19 @@ def optimize_sigmas_2dtm_bayesian(
         "sigma_A_decay": 0.1,     # ~0.1 scale
         "sigma_A_offset": 1.0,    # ~1 scale
     }
-    
+
     if var_image.requires_grad:
         var_image = var_image.clone().detach().requires_grad_(False)
     if mean_image.requires_grad:
         mean_image = mean_image.clone().detach().requires_grad_(False)
     if image.requires_grad:
         image = image.clone().detach().requires_grad_(False)
-    
+
     # Initialize sigma parameters with per-parameter learning rates
     sigma_params = {}
     param_groups = []  # List of {"params": [tensor], "lr": lr} dicts
     base_lr = sigma_optimizer_kwargs.get("lr", 0.1)
-    
+
     if sigma_A_exponential:
         if optimize_sigma_A_amplitude:
             sigma_params["sigma_A_amplitude"] = torch.tensor(
@@ -429,7 +421,7 @@ def optimize_sigmas_2dtm_bayesian(
             })
         else:
             sigma_params["sigma_A_amplitude"] = init_sigma_A_amplitude
-            
+
         if optimize_sigma_A_decay:
             sigma_params["sigma_A_decay"] = torch.tensor(
                 init_sigma_A_decay, device=device, requires_grad=True, dtype=torch.float32
@@ -440,7 +432,7 @@ def optimize_sigmas_2dtm_bayesian(
             })
         else:
             sigma_params["sigma_A_decay"] = init_sigma_A_decay
-            
+
         if optimize_sigma_A_offset:
             sigma_params["sigma_A_offset"] = torch.tensor(
                 init_sigma_A_offset, device=device, requires_grad=True, dtype=torch.float32
@@ -462,7 +454,7 @@ def optimize_sigmas_2dtm_bayesian(
             })
         else:
             sigma_params["sigma_A"] = init_sigma_A
-    
+
     if prior_type == "laplacian" and optimize_alpha_spatial:
         sigma_params["alpha_spatial"] = torch.tensor(
             init_alpha_spatial, device=device, requires_grad=True, dtype=torch.float32
@@ -473,7 +465,7 @@ def optimize_sigmas_2dtm_bayesian(
         })
     else:
         sigma_params["alpha_spatial"] = init_alpha_spatial
-    
+
     if prior_type == "relion":
         if optimize_sigma_D:
             sigma_params["sigma_D"] = torch.tensor(
@@ -485,7 +477,7 @@ def optimize_sigmas_2dtm_bayesian(
             })
         else:
             sigma_params["sigma_D"] = init_sigma_D
-        
+
         if optimize_sigma_V:
             sigma_params["sigma_V"] = torch.tensor(
                 init_sigma_V, device=device, requires_grad=True, dtype=torch.float32
@@ -496,13 +488,13 @@ def optimize_sigmas_2dtm_bayesian(
             })
         else:
             sigma_params["sigma_V"] = init_sigma_V
-    
+
     if len(param_groups) == 0:
         raise ValueError("No sigma parameters selected for optimization!")
-    
+
     # Create optimizer with per-parameter learning rates
     sigma_optimizer = torch.optim.Adam(param_groups)
-    
+
     batch_config_paths, batch_particle_indices = _create_batch_configs(
         refine_config_path=refine_config_path,
         particle_batch_size=particle_batch_size,
@@ -513,14 +505,16 @@ def optimize_sigmas_2dtm_bayesian(
     # Pre-compute mean/std stacks for all batches (they don't change across iterations)
     batch_mean_stacks = {}
     batch_std_stacks = {}
-    for batch_config_path, batch_indices in zip(batch_config_paths, batch_particle_indices, strict=True):
+    for batch_config_path, batch_indices in zip(
+        batch_config_paths, batch_particle_indices, strict=True
+    ):
         batch_refine_manager = _make_differentiable_refine_manager(batch_config_path)
         batch_particle_stack = batch_refine_manager.particle_stack
-            
+
         h, w = batch_particle_stack.original_template_size
         box_h, box_w = batch_particle_stack.extracted_box_size
         extracted_box_size = (box_h - h + 1, box_w - w + 1)
-            
+
         batch_mean_stacks[batch_config_path] = batch_particle_stack.construct_image_stack(
             images=mean_image,
             indices=batch_indices,
@@ -539,58 +533,84 @@ def optimize_sigmas_2dtm_bayesian(
             padding_mode="constant",
             padding_value=1e10,
         )
-        
-    
+
+
     validation_loss_history = []
     training_loss_history = []
     sigma_history = []
-    
+
     # Best-point tracking
     best_validation_loss = None
     best_sigma_iter = None
     best_sigma_params = None
-    
+
     def get_val(key):
         v = sigma_params.get(key)
         return v.abs() if isinstance(v, torch.Tensor) else v
-    
+
     def compute_validation_loss(deformation_field_to_use):
         """Compute validation loss with current sigma parameters."""
         val_loss = 0.0
         with torch.no_grad():
-            for batch_config_path, batch_indices in zip(batch_config_paths, batch_particle_indices, strict=True):
-                batch_refine_manager = _make_differentiable_refine_manager(batch_config_path)
+            for batch_config_path, batch_indices in zip(
+                batch_config_paths, batch_particle_indices, strict=True
+            ):
+                batch_refine_manager = _make_differentiable_refine_manager(
+                    batch_config_path
+                )
                 batch_particle_stack = batch_refine_manager.particle_stack
                 batch_size = len(batch_indices[0])
-                
-                image_stack_batch = batch_particle_stack.construct_image_stack_from_movie(
-                    movie=image, deformation_field=deformation_field_to_use,
-                    pos_reference="top-left", handle_bounds="pad",
-                    padding_mode="reflect", padding_value=0.0,
-                    pre_exposure=pre_exposure, fluence_per_frame=fluence_per_frame
+
+                image_stack_batch = (
+                    batch_particle_stack.construct_image_stack_from_movie(
+                        movie=image,
+                        deformation_field=deformation_field_to_use,
+                        pos_reference="top-left",
+                        handle_bounds="pad",
+                        padding_mode="reflect",
+                        padding_value=0.0,
+                        pre_exposure=pre_exposure,
+                        fluence_per_frame=fluence_per_frame,
+                    )
                 )
-                
+
                 # Reuse pre-computed mean/std stacks (same as motion loop)
                 batch_mean_stack = batch_mean_stacks[batch_config_path]
                 batch_std_stack = batch_std_stacks[batch_config_path]
-                
-                backend_kwargs = batch_refine_manager.make_backend_core_function_kwargs(
-                    image_stack=image_stack_batch,
-                    mean_stack=batch_mean_stack,
-                    std_stack=batch_std_stack,
-                    particle_indices=batch_indices,
-                    template_tensor=validation_template,
-                    images_are_particles=True,
+
+                backend_kwargs = (
+                    batch_refine_manager.make_differentiable_backend_kwargs(
+                        image_stack=image_stack_batch,
+                        mean_stack=batch_mean_stack,
+                        std_stack=batch_std_stack,
+                        particle_indices=batch_indices,
+                        template_tensor=validation_template,
+                        images_are_particles=True,
+                    )
                 )
-                result = batch_refine_manager.get_refine_result(backend_kwargs, correlation_batch_size)
-                
-                val_loss_tensor = result["refined_z_score"] if loss_metric == "scaled_mip" else result["refined_cross_correlation"]
-                val_loss += -torch.mean(val_loss_tensor).item() * batch_size / total_n_particles
-                
-                del image_stack_batch, batch_mean_stack, batch_std_stack, backend_kwargs, result
+                result = batch_refine_manager.get_refine_result(
+                    backend_kwargs, correlation_batch_size, use_differentiable=True
+                )
+
+                val_loss_tensor = (
+                    result["refined_z_score"]
+                    if loss_metric == "scaled_mip"
+                    else result["refined_cross_correlation"]
+                )
+                val_loss += (
+                    -torch.mean(val_loss_tensor).item() * batch_size / total_n_particles
+                )
+
+                del (
+                    image_stack_batch,
+                    batch_mean_stack,
+                    batch_std_stack,
+                    backend_kwargs,
+                    result,
+                )
                 torch.cuda.empty_cache()
         return val_loss
-    
+
     try:
         # Compute initial validation loss (before any optimization)
         print("Computing initial validation loss (with initial deformation field)...")
@@ -609,51 +629,78 @@ def optimize_sigmas_2dtm_bayesian(
                     init_field_data, dim=(1, 2, 3), keepdim=True
                 )
             init_deformation_field = CubicCatmullRomGrid3d.from_grid_data(init_field_data).to(device)
-            
-            for batch_config_path, batch_indices in zip(batch_config_paths, batch_particle_indices, strict=True):
-                batch_refine_manager = _make_differentiable_refine_manager(batch_config_path)
+
+            for batch_config_path, batch_indices in zip(
+                batch_config_paths, batch_particle_indices, strict=True
+            ):
+                batch_refine_manager = _make_differentiable_refine_manager(
+                    batch_config_path
+                )
                 batch_particle_stack = batch_refine_manager.particle_stack
                 batch_size = len(batch_indices[0])
-                
-                image_stack_batch = batch_particle_stack.construct_image_stack_from_movie(
-                    movie=image, deformation_field=init_deformation_field,
-                    pos_reference="top-left", handle_bounds="pad",
-                    padding_mode="reflect", padding_value=0.0,
-                    pre_exposure=pre_exposure, fluence_per_frame=fluence_per_frame
+
+                image_stack_batch = (
+                    batch_particle_stack.construct_image_stack_from_movie(
+                        movie=image,
+                        deformation_field=init_deformation_field,
+                        pos_reference="top-left",
+                        handle_bounds="pad",
+                        padding_mode="reflect",
+                        padding_value=0.0,
+                        pre_exposure=pre_exposure,
+                        fluence_per_frame=fluence_per_frame,
+                    )
                 )
-                
+
                 # Reuse pre-computed mean/std stacks (same as motion loop)
                 batch_mean_stack = batch_mean_stacks[batch_config_path]
                 batch_std_stack = batch_std_stacks[batch_config_path]
-                
-                backend_kwargs = batch_refine_manager.make_backend_core_function_kwargs(
-                    image_stack=image_stack_batch,
-                    mean_stack=batch_mean_stack,
-                    std_stack=batch_std_stack,
-                    particle_indices=batch_indices,
-                    template_tensor=validation_template,
-                    images_are_particles=True,
+
+                backend_kwargs = (
+                    batch_refine_manager.make_differentiable_backend_kwargs(
+                        image_stack=image_stack_batch,
+                        mean_stack=batch_mean_stack,
+                        std_stack=batch_std_stack,
+                        particle_indices=batch_indices,
+                        template_tensor=validation_template,
+                        images_are_particles=True,
+                    )
                 )
-                result = batch_refine_manager.get_refine_result(backend_kwargs, correlation_batch_size)
-                
-                val_loss = result["refined_z_score"] if loss_metric == "scaled_mip" else result["refined_cross_correlation"]
-                initial_validation_loss += -torch.mean(val_loss).item() * batch_size / total_n_particles
-                
-                del image_stack_batch, batch_mean_stack, batch_std_stack, backend_kwargs, result
+                result = batch_refine_manager.get_refine_result(
+                    backend_kwargs, correlation_batch_size, use_differentiable=True
+                )
+
+                val_loss = (
+                    result["refined_z_score"]
+                    if loss_metric == "scaled_mip"
+                    else result["refined_cross_correlation"]
+                )
+                initial_validation_loss += (
+                    -torch.mean(val_loss).item() * batch_size / total_n_particles
+                )
+
+                del (
+                    image_stack_batch,
+                    batch_mean_stack,
+                    batch_std_stack,
+                    backend_kwargs,
+                    result,
+                )
                 torch.cuda.empty_cache()
-        
-        print(f"Initial validation loss (with initial field): {initial_validation_loss:.6f}")
+
+        print(
+            f"Initial validation loss (with initial field): "
+            f"{initial_validation_loss:.6f}"
+        )
         validation_loss_history.append(initial_validation_loss)  # Store as iteration -1
-        
+
         def run_inner_optimization():
             """Run inner motion optimization loop with current sigma parameters.
-            
+
             Returns:
+            ----------
                 tuple: (deformation_field, accumulated_loss)
             """
-            # Load template volume once (same for all batches)
-            template_volume = load_template_volume_from_config(refine_config_path)
-            
             # Initialize deformation field
             if initial_deformation_field is None:
                 deformation_field_data = torch.zeros(
@@ -667,10 +714,12 @@ def optimize_sigmas_2dtm_bayesian(
                     deformation_field_data, dim=(1, 2, 3), keepdim=True
                 )
                 deformation_field_data = deformation_field_data.clone().detach().requires_grad_(True)
-            
+
             deformation_field = CubicCatmullRomGrid3d.from_grid_data(deformation_field_data).to(device)
-            motion_optimizer = torch.optim.Adam(deformation_field.parameters(), lr=optimizer_kwargs["lr"])
-            
+            motion_optimizer = torch.optim.Adam(
+            deformation_field.parameters(), lr=optimizer_kwargs["lr"]
+        )
+
             # Setup prior params
             if prior_type == "laplacian":
                 spatial_spacing, temporal_spacing = _compute_physical_spacing(
@@ -725,79 +774,111 @@ def optimize_sigmas_2dtm_bayesian(
                     sigma_A_norm = _normalize_sigma_fluence(
                         sa, fluence_per_frame * image.shape[0], deformation_field_resolution[0]
                     )
-            
+
             # Inner loop: motion optimization
             for _ in range(motion_iterations):
                 motion_optimizer.zero_grad()
                 accumulated_loss = 0.0
-                
-                for batch_config_path, batch_indices in zip(batch_config_paths, batch_particle_indices, strict=True):
-                    batch_refine_manager = _make_differentiable_refine_manager(batch_config_path)
+
+                for batch_config_path, batch_indices in zip(
+                batch_config_paths, batch_particle_indices, strict=True
+            ):
+                    batch_refine_manager = _make_differentiable_refine_manager(
+                    batch_config_path
+                )
                     batch_particle_stack = batch_refine_manager.particle_stack
                     batch_size = len(batch_indices[0])
-                    
-                    image_stack_batch = batch_particle_stack.construct_image_stack_from_movie(
-                        movie=image, deformation_field=deformation_field,
-                        pos_reference="top-left", handle_bounds="pad",
-                        padding_mode="reflect", padding_value=0.0,
-                        pre_exposure=pre_exposure, fluence_per_frame=fluence_per_frame
+
+                    image_stack_batch = (
+                        batch_particle_stack.construct_image_stack_from_movie(
+                            movie=image,
+                            deformation_field=deformation_field,
+                            pos_reference="top-left",
+                            handle_bounds="pad",
+                            padding_mode="reflect",
+                            padding_value=0.0,
+                            pre_exposure=pre_exposure,
+                            fluence_per_frame=fluence_per_frame,
+                        )
                     )
                     # Reuse pre-computed mean/std stacks
                     batch_mean_stack = batch_mean_stacks[batch_config_path]
                     batch_std_stack = batch_std_stacks[batch_config_path]
 
-                    backend_kwargs = batch_refine_manager.make_backend_core_function_kwargs(
-                        image_stack=image_stack_batch,
-                        mean_stack=batch_mean_stack,
-                        std_stack=batch_std_stack,
-                        particle_indices=batch_indices,
-                        template_tensor=template_volume,
-                        images_are_particles=True,
+                    backend_kwargs = (
+                        batch_refine_manager.make_differentiable_backend_kwargs(
+                            image_stack=image_stack_batch,
+                            mean_stack=batch_mean_stack,
+                            std_stack=batch_std_stack,
+                            particle_indices=batch_indices,
+                            template_tensor=template_volume,
+                            images_are_particles=True,
+                        )
                     )
 
-                    result = batch_refine_manager.get_refine_result(backend_kwargs, correlation_batch_size)
-                    
-                    loss_tensor = result["refined_z_score"] if loss_metric == "scaled_mip" else result["refined_cross_correlation"]
-                    
+                    result = batch_refine_manager.get_refine_result(
+                    backend_kwargs, correlation_batch_size, use_differentiable=True
+                )
+
+                    loss_tensor = (
+                        result["refined_z_score"]
+                        if loss_metric == "scaled_mip"
+                        else result["refined_cross_correlation"]
+                    )
+
                     if prior_type == "laplacian":
                         E_space, E_time = laplacian_compute(
-                            deformation_field._data, sigma_A_tensor, alpha, spatial_spacing, temporal_spacing
+                            deformation_field._data,
+                            sigma_A_tensor,
+                            alpha,
+                            spatial_spacing,
+                            temporal_spacing,
                         )
                     else:
                         E_space, E_time = relion2019_compute(
-                            deformation_field._data, image_coords, sigma_D_val, sigma_V_norm, sigma_A_norm
+                            deformation_field._data,
+                            image_coords,
+                            sigma_D_val,
+                            sigma_V_norm,
+                            sigma_A_norm,
                         )
-                    
+
                     E_space = E_space * batch_size / total_n_particles
                     E_time = E_time * batch_size / total_n_particles
                     E_obs = -2 * torch.mean(loss_tensor) * batch_size / total_n_particles
-                    
+
                     batch_loss = E_obs + E_space + E_time
                     accumulated_loss += batch_loss.item()
                     batch_loss.backward()
-                    
-                    del image_stack_batch, batch_mean_stack, batch_std_stack, backend_kwargs, result
+
+                    del (
+                    image_stack_batch,
+                    batch_mean_stack,
+                    batch_std_stack,
+                    backend_kwargs,
+                    result,
+                )
                     torch.cuda.empty_cache()
-                
+
                 motion_optimizer.step()
-            
+
             return deformation_field, accumulated_loss
-        
+
         sigma_pbar = tqdm.tqdm(range(sigma_iterations), desc="Sigma optimization")
-        
+
         for sigma_iter in sigma_pbar:
             print(f"sigma_iter: {sigma_iter}")
-            
+
             # Run inner optimization with current sigma parameters
             deformation_field, accumulated_loss = run_inner_optimization()
             training_loss_history.append(accumulated_loss)
-            
+
             # Validation with held-out template
             validation_loss = compute_validation_loss(deformation_field)
             print(f"validation_loss: {validation_loss}")
 
             validation_loss_history.append(validation_loss)
-            
+
             # Best-point tracking
             if best_validation_loss is None or validation_loss < best_validation_loss:
                 best_validation_loss = validation_loss
@@ -815,10 +896,10 @@ def optimize_sigmas_2dtm_bayesian(
                 # Compute gradients for each parameter using finite differences
                 # This is expensive but necessary since gradients don't flow through the validation loss
                 finite_diff_step_relative = 1e-3  # Relative step size (0.1% of parameter value)
-                
+
                 if verbose:
                     print("Computing per-parameter gradients using finite differences...")
-                
+
                 for group in param_groups:
                     for param in group["params"]:
                         # Find which parameter this is
@@ -827,51 +908,51 @@ def optimize_sigmas_2dtm_bayesian(
                             if p is param:
                                 param_name = name
                                 break
-                        
+
                         if param_name is None:
                             continue
-                        
+
                         # Store original value
                         param_val = param.item()
-                        
+
                         # Compute step size (relative to parameter magnitude)
                         step = max(abs(param_val) * finite_diff_step_relative, 1e-6)
-                        
+
                         if verbose:
                             print(f"  Computing gradient for {param_name} (current={param_val:.6f}, step={step:.6f})")
-                        
+
                         # Perturb parameter upward and re-optimize
                         param.data.fill_(param_val + step)
                         # Re-run inner optimization with perturbed sigma
                         deformation_field_plus, _ = run_inner_optimization()
                         loss_plus = compute_validation_loss(deformation_field_plus)
-                        
+
                         # Perturb parameter downward and re-optimize
                         param.data.fill_(param_val - step)
                         deformation_field_minus, _ = run_inner_optimization()
                         loss_minus = compute_validation_loss(deformation_field_minus)
-                        
+
                         # Restore original parameter value
                         param.data.fill_(param_val)
-                        
+
                         # Compute gradient: (f(x+h) - f(x-h)) / (2h)
                         grad = (loss_plus - loss_minus) / (2 * step)
                         param.grad = torch.tensor(grad, device=param.device, dtype=param.dtype)
-                        
+
                         if verbose:
                             print(f"    loss_plus={loss_plus:.6f}, loss_minus={loss_minus:.6f}, grad={grad:.6f}")
-                        
+
                         # Clean up
                         del deformation_field_plus, deformation_field_minus
                         torch.cuda.empty_cache()
-                
+
                 # Take optimizer step with computed gradients
                 sigma_optimizer.step()
                 with torch.no_grad():
                     for group in param_groups:
                         for param in group["params"]:
                             param.clamp_(min=1e-6)
-            
+
             # Apply random perturbation to escape local minima
             if perturbation_interval > 0 and (sigma_iter + 1) % perturbation_interval == 0:
                 print(f"Applying random perturbation (scale={perturbation_scale})")
@@ -886,10 +967,10 @@ def optimize_sigmas_2dtm_bayesian(
             current_sigmas = {k: (v.item() if isinstance(v, torch.Tensor) else v) for k, v in sigma_params.items()}
             print(f"current_sigmas: {current_sigmas}")
             sigma_history.append(current_sigmas.copy())
-            
+
             if verbose:
                 sigma_pbar.set_postfix({"train": f"{accumulated_loss:.3f}", "val": f"{validation_loss:.3f}"})
-        
+
         # Use best point if it's better than final point
         final_validation_loss = validation_loss_history[-1]
         if best_validation_loss is not None and final_validation_loss > best_validation_loss:
@@ -902,12 +983,12 @@ def optimize_sigmas_2dtm_bayesian(
                     sigma_params[name].data.fill_(best_val)
             # Re-run inner optimization with best parameters to get best deformation field
             deformation_field, _ = run_inner_optimization()
-        
+
         final_deformation_field = deformation_field.data
         final_deformation_field = final_deformation_field - torch.mean(final_deformation_field, dim=(1, 2, 3), keepdim=True)
-        
+
         optimized_sigmas = {k: (v.item() if isinstance(v, torch.Tensor) else v) for k, v in sigma_params.items()}
-        
+
         # Print summary
         if verbose and best_validation_loss is not None:
             print("\n" + "=" * 70)
@@ -915,19 +996,18 @@ def optimize_sigmas_2dtm_bayesian(
             print("=" * 70)
             print(f"Best validation loss: {best_validation_loss:.6f} (iteration {best_sigma_iter})")
             print(f"Final validation loss: {validation_loss_history[-1]:.6f}")
-            print(f"Best parameters:")
+            print("Best parameters:")
             for name, val in best_sigma_params.items():
                 print(f"  {name}: {val:.6f}")
             print("=" * 70)
-        
+
     finally:
         if temp_dir.exists():
             shutil.rmtree(temp_dir)
             if verbose:
                 print(f"Cleaned up temporary configs at {temp_dir}")
-    
+
     # Save results to files if paths are specified
-    import json
     if optimized_sigmas_output_path is not None:
         with open(optimized_sigmas_output_path, 'w', encoding='utf-8') as f:
             json.dump(optimized_sigmas, f, indent=2)
@@ -959,19 +1039,15 @@ def optimize_sigmas_2dtm_bayesian(
         "training_loss_history": training_loss_history,
         "sigma_history": sigma_history,
     }
-    
+
     # Add best-point information
     if best_validation_loss is not None:
         result["best_validation_loss"] = best_validation_loss
         result["best_sigma_iter"] = best_sigma_iter
         result["best_sigma_params"] = best_sigma_params
-    
+
     return result
 
-
-# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
-
-# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
 def optimize_sigmas_2dtm_nelder_mead(
     image: torch.Tensor,  # (t, H, W)
     var_image: torch.Tensor,
@@ -1018,15 +1094,15 @@ def optimize_sigmas_2dtm_nelder_mead(
     validation_history_output_path: str | None = None,
 ) -> dict[str, Any]:
     """Optimize prior hyperparameters using Nelder-Mead method.
-    
+
     Uses scipy.optimize.minimize with Nelder-Mead (simplex) method for the outer
     loop optimization of sigma parameters. The inner loop still uses Adam optimizer
     for motion estimation.
-    
+
     This method is derivative-free and typically faster than gradient-based methods
     when function evaluations are expensive, as it requires fewer evaluations per
     iteration.
-    
+
     Parameters
     ----------
     image : torch.Tensor
@@ -1109,7 +1185,7 @@ def optimize_sigmas_2dtm_nelder_mead(
         Path to save training loss history as JSON. Default None
     validation_history_output_path : str | None
         Path to save validation loss history as JSON. Default None
-        
+
     Returns
     -------
     dict
@@ -1122,11 +1198,9 @@ def optimize_sigmas_2dtm_nelder_mead(
         - "best_sigma_iter": iteration with best validation loss
         - "best_sigma_params": best sigma parameters found
     """
-    import mrcfile
-    
     torch.set_grad_enabled(True)
     temp_dir = Path(tempfile.mkdtemp(prefix="ripple_sigma_opt_nelder_"))
-    
+
     refine_config_path, particle_indices = _filter_particles_by_quality(
         refine_config_path=refine_config_path,
         particle_indices=particle_indices,
@@ -1135,25 +1209,28 @@ def optimize_sigmas_2dtm_nelder_mead(
         best_n=best_n,
         temp_dir=temp_dir,
     )
-    
+
     with mrcfile.open(validation_template_path, mode='r') as mrc:
-        validation_template = torch.tensor(mrc.data.copy(), device=device, dtype=torch.float32)
-    
+        validation_template = torch.tensor(
+            mrc.data.copy(), device=device, dtype=torch.float32
+        )
+    template_volume = load_template_volume_from_config(refine_config_path)
+
     if optimizer_kwargs is None:
         optimizer_kwargs = {"lr": 0.2}
-    
+
     if var_image.requires_grad:
         var_image = var_image.clone().detach().requires_grad_(False)
     if mean_image.requires_grad:
         mean_image = mean_image.clone().detach().requires_grad_(False)
     if image.requires_grad:
         image = image.clone().detach().requires_grad_(False)
-    
+
     # Build parameter list and initial values
     param_names = []
     initial_values = []
     sigma_params = {}  # Store all parameters (both optimized and fixed)
-    
+
     # Collect parameters to optimize
     if sigma_A_exponential:
         if optimize_sigma_A_amplitude:
@@ -1162,14 +1239,14 @@ def optimize_sigmas_2dtm_nelder_mead(
             sigma_params["sigma_A_amplitude"] = init_sigma_A_amplitude
         else:
             sigma_params["sigma_A_amplitude"] = init_sigma_A_amplitude
-            
+
         if optimize_sigma_A_decay:
             param_names.append("sigma_A_decay")
             initial_values.append(init_sigma_A_decay)
             sigma_params["sigma_A_decay"] = init_sigma_A_decay
         else:
             sigma_params["sigma_A_decay"] = init_sigma_A_decay
-            
+
         if optimize_sigma_A_offset:
             param_names.append("sigma_A_offset")
             initial_values.append(init_sigma_A_offset)
@@ -1183,14 +1260,14 @@ def optimize_sigmas_2dtm_nelder_mead(
             sigma_params["sigma_A"] = init_sigma_A
         else:
             sigma_params["sigma_A"] = init_sigma_A
-    
+
     if prior_type == "laplacian" and optimize_alpha_spatial:
         param_names.append("alpha_spatial")
         initial_values.append(init_alpha_spatial)
         sigma_params["alpha_spatial"] = init_alpha_spatial
     else:
         sigma_params["alpha_spatial"] = init_alpha_spatial
-    
+
     if prior_type == "relion":
         if optimize_sigma_D:
             param_names.append("sigma_D")
@@ -1198,17 +1275,17 @@ def optimize_sigmas_2dtm_nelder_mead(
             sigma_params["sigma_D"] = init_sigma_D
         else:
             sigma_params["sigma_D"] = init_sigma_D
-            
+
         if optimize_sigma_V:
             param_names.append("sigma_V")
             initial_values.append(init_sigma_V)
             sigma_params["sigma_V"] = init_sigma_V
         else:
             sigma_params["sigma_V"] = init_sigma_V
-    
+
     if len(param_names) == 0:
         raise ValueError("No sigma parameters selected for optimization!")
-    
+
     batch_config_paths, batch_particle_indices = _create_batch_configs(
         refine_config_path=refine_config_path,
         particle_batch_size=particle_batch_size,
@@ -1219,14 +1296,19 @@ def optimize_sigmas_2dtm_nelder_mead(
     # Pre-compute mean/std stacks for all batches (they don't change across iterations)
     batch_mean_stacks = {}
     batch_std_stacks = {}
-    for batch_config_path, batch_indices in zip(batch_config_paths, batch_particle_indices, strict=True):
+    # Get extraction size from first batch
+    temp_manager = _make_differentiable_refine_manager(batch_config_paths[0])
+    h, w = temp_manager.particle_stack.original_template_size
+    box_h, box_w = temp_manager.particle_stack.extracted_box_size
+    extracted_box_size = (box_h - h + 1, box_w - w + 1)
+    del temp_manager
+
+    for batch_config_path, batch_indices in zip(
+        batch_config_paths, batch_particle_indices, strict=True
+    ):
         batch_refine_manager = _make_differentiable_refine_manager(batch_config_path)
         batch_particle_stack = batch_refine_manager.particle_stack
-        
-        h, w = batch_particle_stack.original_template_size
-        box_h, box_w = batch_particle_stack.extracted_box_size
-        extracted_box_size = (box_h - h + 1, box_w - w + 1)
-        
+
         batch_mean_stacks[batch_config_path] = batch_particle_stack.construct_image_stack(
             images=mean_image,
             indices=batch_indices,
@@ -1245,63 +1327,94 @@ def optimize_sigmas_2dtm_nelder_mead(
             padding_mode="constant",
             padding_value=1e10,
         )
-    
+
+        del batch_refine_manager, batch_particle_stack
+
+    torch.cuda.empty_cache()
+    gc.collect()
+
     validation_loss_history = []
     training_loss_history = []
     sigma_history = []
-    
+
     # Best-point tracking
     best_validation_loss = None
     best_sigma_iter = None
     best_sigma_params = None
-    
+
     def get_val(key):
         """Get parameter value, handling both dict and tensor cases."""
         v = sigma_params.get(key)
         return abs(v) if isinstance(v, (int, float)) else v
-    
+
     def compute_validation_loss(deformation_field_to_use):
         """Compute validation loss with current sigma parameters."""
         val_loss = 0.0
         with torch.no_grad():
-            for batch_config_path, batch_indices in zip(batch_config_paths, batch_particle_indices, strict=True):
-                batch_refine_manager = _make_differentiable_refine_manager(batch_config_path)
+            for batch_config_path, batch_indices in zip(
+                batch_config_paths, batch_particle_indices, strict=True
+            ):
+                batch_refine_manager = _make_differentiable_refine_manager(
+                    batch_config_path
+                )
                 batch_particle_stack = batch_refine_manager.particle_stack
                 batch_size = len(batch_indices[0])
-                
-                image_stack_batch = batch_particle_stack.construct_image_stack_from_movie(
-                    movie=image, deformation_field=deformation_field_to_use,
-                    pos_reference="top-left", handle_bounds="pad",
-                    padding_mode="reflect", padding_value=0.0,
-                    pre_exposure=pre_exposure, fluence_per_frame=fluence_per_frame
+
+                image_stack_batch = (
+                    batch_particle_stack.construct_image_stack_from_movie(
+                        movie=image,
+                        deformation_field=deformation_field_to_use,
+                        pos_reference="top-left",
+                        handle_bounds="pad",
+                        padding_mode="reflect",
+                        padding_value=0.0,
+                        pre_exposure=pre_exposure,
+                        fluence_per_frame=fluence_per_frame,
+                    )
                 )
-                
+
                 # Reuse pre-computed mean/std stacks (same as motion loop)
                 batch_mean_stack = batch_mean_stacks[batch_config_path]
                 batch_std_stack = batch_std_stacks[batch_config_path]
-                
-                backend_kwargs = batch_refine_manager.make_backend_core_function_kwargs(
-                    image_stack=image_stack_batch,
-                    mean_stack=batch_mean_stack,
-                    std_stack=batch_std_stack,
-                    particle_indices=batch_indices,
-                    template_tensor=validation_template,
-                    images_are_particles=True,
+
+                backend_kwargs = (
+                    batch_refine_manager.make_differentiable_backend_kwargs(
+                        image_stack=image_stack_batch,
+                        mean_stack=batch_mean_stack,
+                        std_stack=batch_std_stack,
+                        particle_indices=batch_indices,
+                        template_tensor=validation_template,
+                        images_are_particles=True,
+                    )
                 )
-                result = batch_refine_manager.get_refine_result(backend_kwargs, correlation_batch_size)
-                
-                val_loss_tensor = result["refined_z_score"] if loss_metric == "scaled_mip" else result["refined_cross_correlation"]
-                val_loss += -torch.mean(val_loss_tensor).item() * batch_size / total_n_particles
-                
-                del image_stack_batch, batch_mean_stack, batch_std_stack, backend_kwargs, result
+                result = batch_refine_manager.get_refine_result(
+                    backend_kwargs, correlation_batch_size, use_differentiable=True
+                )
+
+                val_loss_tensor = (
+                    result["refined_z_score"]
+                    if loss_metric == "scaled_mip"
+                    else result["refined_cross_correlation"]
+                )
+                val_loss += (
+                    -torch.mean(val_loss_tensor).item() * batch_size / total_n_particles
+                )
+
+                del (
+                    image_stack_batch,
+                    batch_mean_stack,
+                    batch_std_stack,
+                    backend_kwargs,
+                    result,
+                )
                 torch.cuda.empty_cache()
         return val_loss
-    
+
     def run_inner_optimization():
         """Run inner motion optimization loop with current sigma parameters."""
         # Load template volume once (same for all batches)
-        template_volume = load_template_volume_from_config(refine_config_path)
-        
+        #template_volume = load_template_volume_from_config(refine_config_path)
+
         # Initialize deformation field
         if initial_deformation_field is None:
             deformation_field_data = torch.zeros(
@@ -1314,11 +1427,14 @@ def optimize_sigmas_2dtm_nelder_mead(
             deformation_field_data = deformation_field_data - torch.mean(
                 deformation_field_data, dim=(1, 2, 3), keepdim=True
             )
-            deformation_field_data = deformation_field_data.clone().detach().requires_grad_(True)
-        
+            deformation_field_data = deformation_field_data.detach().clone()
+
+        deformation_field_data.requires_grad_(True)
         deformation_field = CubicCatmullRomGrid3d.from_grid_data(deformation_field_data).to(device)
-        motion_optimizer = torch.optim.Adam(deformation_field.parameters(), lr=optimizer_kwargs["lr"])
-        
+        motion_optimizer = torch.optim.Adam(
+            deformation_field.parameters(), lr=optimizer_kwargs["lr"]
+        )
+
         # Setup prior params
         if prior_type == "laplacian":
             spatial_spacing, temporal_spacing = _compute_physical_spacing(
@@ -1360,43 +1476,59 @@ def optimize_sigmas_2dtm_nelder_mead(
             else:
                 sa = get_val("sigma_A")
                 sigma_A_norm = _normalize_sigma_fluence(
-                    sa, fluence_per_frame * image.shape[0], deformation_field_resolution[0]
+                    sa,
+                    fluence_per_frame * image.shape[0],
+                    deformation_field_resolution[0],
                 )
-        
+
         # Inner loop: motion optimization
         accumulated_loss = 0.0
-        for _ in range(motion_iterations):
+        for iter_idx in range(motion_iterations):
             motion_optimizer.zero_grad()
             batch_accumulated_loss = 0.0
-            
-            for batch_config_path, batch_indices in zip(batch_config_paths, batch_particle_indices, strict=True):
-                batch_refine_manager = _make_differentiable_refine_manager(batch_config_path)
+
+            for batch_config_path, batch_indices in zip(
+                batch_config_paths, batch_particle_indices, strict=True
+            ):
+                batch_refine_manager = _make_differentiable_refine_manager(
+                    batch_config_path
+                )
                 batch_particle_stack = batch_refine_manager.particle_stack
                 batch_size = len(batch_indices[0])
-                
-                image_stack_batch = batch_particle_stack.construct_image_stack_from_movie(
-                    movie=image, deformation_field=deformation_field,
-                    pos_reference="top-left", handle_bounds="pad",
-                    padding_mode="reflect", padding_value=0.0,
-                    pre_exposure=pre_exposure, fluence_per_frame=fluence_per_frame
+
+                image_stack_batch = (
+                    batch_particle_stack.construct_image_stack_from_movie(
+                        movie=image,
+                        deformation_field=deformation_field,
+                        pos_reference="top-left",
+                        handle_bounds="pad",
+                        padding_mode="reflect",
+                        padding_value=0.0,
+                        pre_exposure=pre_exposure,
+                        fluence_per_frame=fluence_per_frame,
+                    )
                 )
-                
+
                 # Reuse pre-computed mean/std stacks
                 batch_mean_stack = batch_mean_stacks[batch_config_path]
                 batch_std_stack = batch_std_stacks[batch_config_path]
-                
-                backend_kwargs = batch_refine_manager.make_backend_core_function_kwargs(
-                    image_stack=image_stack_batch,
-                    mean_stack=batch_mean_stack,
-                    std_stack=batch_std_stack,
-                    particle_indices=batch_indices,
-                    template_tensor=template_volume,
-                    images_are_particles=True,
+
+                backend_kwargs = (
+                    batch_refine_manager.make_differentiable_backend_kwargs(
+                        image_stack=image_stack_batch,
+                        mean_stack=batch_mean_stack,
+                        std_stack=batch_std_stack,
+                        particle_indices=batch_indices,
+                        template_tensor=template_volume,
+                        images_are_particles=True,
+                    )
                 )
-                result = batch_refine_manager.get_refine_result(backend_kwargs, correlation_batch_size)
-                
+                result = batch_refine_manager.get_refine_result(
+                    backend_kwargs, correlation_batch_size, use_differentiable=True
+                )
+
                 loss_tensor = result["refined_z_score"] if loss_metric == "scaled_mip" else result["refined_cross_correlation"]
-                
+
                 if prior_type == "laplacian":
                     E_space, E_time = laplacian_compute(
                         deformation_field._data, sigma_A_tensor, alpha, spatial_spacing, temporal_spacing
@@ -1405,63 +1537,75 @@ def optimize_sigmas_2dtm_nelder_mead(
                     E_space, E_time = relion2019_compute(
                         deformation_field._data, image_coords, sigma_D_val, sigma_V_norm, sigma_A_norm
                     )
-                
-                E_space = E_space * batch_size / total_n_particles
-                E_time = E_time * batch_size / total_n_particles
-                E_obs = -2 * torch.mean(loss_tensor) * batch_size / total_n_particles
-                
+
+                weight = batch_size / total_n_particles
+                E_space = E_space * weight
+                E_time = E_time * weight
+                E_obs = -2 * torch.mean(loss_tensor) * weight
+
                 batch_loss = E_obs + E_space + E_time
                 batch_accumulated_loss += batch_loss.item()
                 batch_loss.backward()
-                
-                del image_stack_batch, batch_mean_stack, batch_std_stack, backend_kwargs, result
-                torch.cuda.empty_cache()
-            
+
+                # Delete everything
+                del image_stack_batch, backend_kwargs, result, loss_tensor
+                del batch_loss, E_obs, E_space, E_time
+                del batch_refine_manager, batch_particle_stack
+
+            torch.cuda.empty_cache()
             motion_optimizer.step()
             accumulated_loss += batch_accumulated_loss
 
+            if iter_idx % 3 == 0:
+                gc.collect()
+                torch.cuda.empty_cache()
+
         # Detach and clone the final deformation field to break computation graph
-        final_deformation_data = deformation_field.data.clone().detach()
-        
+        final_deformation_data = deformation_field.data.detach().clone()
+
         # Clean up optimizer
-        del motion_optimizer
+        del motion_optimizer, deformation_field_data, deformation_field
+        if prior_type == "laplacian":
+            if isinstance(sigma_A_tensor, torch.Tensor):
+                del sigma_A_tensor
+        else:
+            del image_coords
+            if isinstance(sigma_A_norm, torch.Tensor):
+                del sigma_A_norm
+
+        gc.collect()
         torch.cuda.empty_cache()
-        
-        # Return a new deformation field without gradients
+
         deformation_field_clean = CubicCatmullRomGrid3d.from_grid_data(
             final_deformation_data
         ).to(device)
-        
-        # Clean up original
-        del deformation_field
-        torch.cuda.empty_cache()
 
         return deformation_field_clean, accumulated_loss
-    
+
     # Objective function for scipy.optimize.minimize
     def objective_function(x):
         """Objective function for Nelder-Mead optimization.
-        
+
         Args:
             x: numpy array of parameter values (in order of param_names)
-        
+
         Returns:
             validation_loss: float
         """
         # Set sigma parameters from x
         for i, param_name in enumerate(param_names):
             sigma_params[param_name] = float(x[i])
-        
+
         # Run inner optimization with current sigmas
         deformation_field, accumulated_loss = run_inner_optimization()
-        
+
         # Compute validation loss
         validation_loss = compute_validation_loss(deformation_field)
-        
+
         # Track history
         validation_loss_history.append(validation_loss)
         training_loss_history.append(accumulated_loss)
-        
+
         # Track best point
         nonlocal best_validation_loss, best_sigma_iter, best_sigma_params
         if best_validation_loss is None or validation_loss < best_validation_loss:
@@ -1472,24 +1616,25 @@ def optimize_sigmas_2dtm_nelder_mead(
             }
             if verbose:
                 print(f"✓ New best validation loss: {best_validation_loss:.6f}")
-        
+
         # Record current sigmas (include fixed parameters too)
         current_sigmas = sigma_params.copy()
         sigma_history.append(current_sigmas.copy())
-        
+
         if verbose:
             print(f"Iteration {len(validation_loss_history)}: Parameters: {dict(zip(param_names, x))}")
             print(f"  Validation loss: {validation_loss:.6f}")
 
         del deformation_field
-        torch.cuda.empty_cache()        
-        
+        gc.collect()
+        torch.cuda.empty_cache()
+
         return validation_loss
-    
+
     try:
         # Convert initial values to numpy array
         x0 = np.array(initial_values, dtype=np.float64)
-        
+
         if verbose:
             print("=" * 70)
             print("NELDER-MEAD SIGMA OPTIMIZATION")
@@ -1497,7 +1642,7 @@ def optimize_sigmas_2dtm_nelder_mead(
             print(f"Initial values: {dict(zip(param_names, initial_values))}")
             print(f"Maximum iterations: {sigma_iterations}")
             print("=" * 70)
-        
+
         # Run Nelder-Mead optimization
         result = minimize(
             objective_function,
@@ -1510,7 +1655,7 @@ def optimize_sigmas_2dtm_nelder_mead(
                 'disp': verbose,
             },
         )
-        
+
         if verbose:
             print("\n" + "=" * 70)
             print("NELDER-MEAD OPTIMIZATION COMPLETE")
@@ -1520,21 +1665,20 @@ def optimize_sigmas_2dtm_nelder_mead(
             print(f"Number of iterations: {result.nit}")
             print(f"Number of function evaluations: {result.nfev}")
             print("=" * 70)
-        
+
         # Extract optimized values
         optimized_values = result.x
         for i, param_name in enumerate(param_names):
             sigma_params[param_name] = float(optimized_values[i])
-        
         # Get final deformation field with optimized parameters
         deformation_field, _ = run_inner_optimization()
         final_deformation_field = deformation_field.data
         final_deformation_field = final_deformation_field - torch.mean(
             final_deformation_field, dim=(1, 2, 3), keepdim=True
         )
-        
+
         optimized_sigmas = sigma_params.copy()
-        
+
         # Use best point if it's better than final point
         final_validation_loss = validation_loss_history[-1]
         if best_validation_loss is not None and final_validation_loss > best_validation_loss:
@@ -1551,7 +1695,7 @@ def optimize_sigmas_2dtm_nelder_mead(
                 final_deformation_field, dim=(1, 2, 3), keepdim=True
             )
             optimized_sigmas = sigma_params.copy()
-        
+
         # Print summary
         if verbose and best_validation_loss is not None:
             print("\n" + "=" * 70)
@@ -1563,15 +1707,17 @@ def optimize_sigmas_2dtm_nelder_mead(
             for name, val in best_sigma_params.items():
                 print(f"  {name}: {val:.6f}")
             print("=" * 70)
-        
+
     finally:
+        del batch_mean_stacks, batch_std_stacks, template_volume, validation_template
+        gc.collect()
+        torch.cuda.empty_cache()
         if temp_dir.exists():
             shutil.rmtree(temp_dir)
             if verbose:
                 print(f"Cleaned up temporary configs at {temp_dir}")
-    
+
     # Save results to files if paths are specified
-    import json
     if optimized_sigmas_output_path is not None:
         with open(optimized_sigmas_output_path, 'w', encoding='utf-8') as f:
             json.dump(optimized_sigmas, f, indent=2)
@@ -1595,7 +1741,7 @@ def optimize_sigmas_2dtm_nelder_mead(
             json.dump(validation_loss_history, f, indent=2)
         if verbose:
             print(f"Saved validation history to: {validation_history_output_path}")
-    
+
     result_dict = {
         "optimized_sigmas": optimized_sigmas,
         "final_deformation_field": final_deformation_field,
@@ -1603,19 +1749,15 @@ def optimize_sigmas_2dtm_nelder_mead(
         "training_loss_history": training_loss_history,
         "sigma_history": sigma_history,
     }
-    
+
     # Add best-point information
     if best_validation_loss is not None:
         result_dict["best_validation_loss"] = best_validation_loss
         result_dict["best_sigma_iter"] = best_sigma_iter
         result_dict["best_sigma_params"] = best_sigma_params
-    
+
     return result_dict
 
-
-# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
-
-# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
 def optimize_sigmas_2dtm_optuna(
     image: torch.Tensor,  # (t, H, W)
     var_image: torch.Tensor,
@@ -1669,11 +1811,11 @@ def optimize_sigmas_2dtm_optuna(
     validation_history_output_path: str | None = None,
 ) -> dict[str, Any]:
     """Optimize prior hyperparameters using Optuna (Bayesian optimization).
-    
+
     Uses Optuna's Tree-structured Parzen Estimator (TPE) for intelligent
     hyperparameter search. The inner loop still uses Adam optimizer for
     motion estimation.
-    
+
     Advantages of Optuna:
     - Bayesian optimization: Learns from previous trials to focus on promising regions
     - Global search: Better at finding global minima than local optimizers
@@ -1681,7 +1823,7 @@ def optimize_sigmas_2dtm_optuna(
     - Pruning: Can stop unpromising trials early to save computation
     - Parallelization: Can run multiple trials in parallel
     - Automatic parameter handling: Supports continuous, discrete, categorical
-    
+
     Parameters
     ----------
     image : torch.Tensor
@@ -1780,7 +1922,7 @@ def optimize_sigmas_2dtm_optuna(
         Path to save training loss history as JSON. Default None
     validation_history_output_path : str | None
         Path to save validation loss history as JSON. Default None
-        
+
     Returns
     -------
     dict
@@ -1794,12 +1936,11 @@ def optimize_sigmas_2dtm_optuna(
         - "best_sigma_params": best sigma parameters found
         - "optuna_study": Optuna study object (for further analysis)
     """
-    import mrcfile
     print("Optimizing sigmas using Optuna...")
-    
+
     torch.set_grad_enabled(True)
     temp_dir = Path(tempfile.mkdtemp(prefix="ripple_sigma_opt_optuna_"))
-    
+
     refine_config_path, particle_indices = _filter_particles_by_quality(
         refine_config_path=refine_config_path,
         particle_indices=particle_indices,
@@ -1808,25 +1949,28 @@ def optimize_sigmas_2dtm_optuna(
         best_n=best_n,
         temp_dir=temp_dir,
     )
-    
+
     with mrcfile.open(validation_template_path, mode='r') as mrc:
-        validation_template = torch.tensor(mrc.data.copy(), device=device, dtype=torch.float32)
-    
+        validation_template = torch.tensor(
+            mrc.data.copy(), device=device, dtype=torch.float32
+        )
+    template_volume = load_template_volume_from_config(refine_config_path)
+
     if optimizer_kwargs is None:
         optimizer_kwargs = {"lr": 0.2}
-    
+
     if var_image.requires_grad:
         var_image = var_image.clone().detach().requires_grad_(False)
     if mean_image.requires_grad:
         mean_image = mean_image.clone().detach().requires_grad_(False)
     if image.requires_grad:
         image = image.clone().detach().requires_grad_(False)
-    
+
     # Build parameter list and initial values
     param_names = []
     initial_values = {}
     sigma_params = {}  # Store all parameters (both optimized and fixed)
-    
+
     # Collect parameters to optimize
     if sigma_A_exponential:
         if optimize_sigma_A_amplitude:
@@ -1835,14 +1979,14 @@ def optimize_sigmas_2dtm_optuna(
             sigma_params["sigma_A_amplitude"] = init_sigma_A_amplitude
         else:
             sigma_params["sigma_A_amplitude"] = init_sigma_A_amplitude
-            
+
         if optimize_sigma_A_decay:
             param_names.append("sigma_A_decay")
             initial_values["sigma_A_decay"] = init_sigma_A_decay
             sigma_params["sigma_A_decay"] = init_sigma_A_decay
         else:
             sigma_params["sigma_A_decay"] = init_sigma_A_decay
-            
+
         if optimize_sigma_A_offset:
             param_names.append("sigma_A_offset")
             initial_values["sigma_A_offset"] = init_sigma_A_offset
@@ -1856,14 +2000,14 @@ def optimize_sigmas_2dtm_optuna(
             sigma_params["sigma_A"] = init_sigma_A
         else:
             sigma_params["sigma_A"] = init_sigma_A
-    
+
     if prior_type == "laplacian" and optimize_alpha_spatial:
         param_names.append("alpha_spatial")
         initial_values["alpha_spatial"] = init_alpha_spatial
         sigma_params["alpha_spatial"] = init_alpha_spatial
     else:
         sigma_params["alpha_spatial"] = init_alpha_spatial
-    
+
     if prior_type == "relion":
         if optimize_sigma_D:
             param_names.append("sigma_D")
@@ -1871,17 +2015,17 @@ def optimize_sigmas_2dtm_optuna(
             sigma_params["sigma_D"] = init_sigma_D
         else:
             sigma_params["sigma_D"] = init_sigma_D
-            
+
         if optimize_sigma_V:
             param_names.append("sigma_V")
             initial_values["sigma_V"] = init_sigma_V
             sigma_params["sigma_V"] = init_sigma_V
         else:
             sigma_params["sigma_V"] = init_sigma_V
-    
+
     if len(param_names) == 0:
         raise ValueError("No sigma parameters selected for optimization!")
-    
+
     batch_config_paths, batch_particle_indices = _create_batch_configs(
         refine_config_path=refine_config_path,
         particle_batch_size=particle_batch_size,
@@ -1892,14 +2036,16 @@ def optimize_sigmas_2dtm_optuna(
     # Pre-compute mean/std stacks for all batches (they don't change across iterations)
     batch_mean_stacks = {}
     batch_std_stacks = {}
-    for batch_config_path, batch_indices in zip(batch_config_paths, batch_particle_indices, strict=True):
+    for batch_config_path, batch_indices in zip(
+        batch_config_paths, batch_particle_indices, strict=True
+    ):
         batch_refine_manager = _make_differentiable_refine_manager(batch_config_path)
         batch_particle_stack = batch_refine_manager.particle_stack
-        
+
         h, w = batch_particle_stack.original_template_size
         box_h, box_w = batch_particle_stack.extracted_box_size
         extracted_box_size = (box_h - h + 1, box_w - w + 1)
-        
+
         batch_mean_stacks[batch_config_path] = batch_particle_stack.construct_image_stack(
             images=mean_image,
             indices=batch_indices,
@@ -1918,58 +2064,82 @@ def optimize_sigmas_2dtm_optuna(
             padding_mode="constant",
             padding_value=1e10,
         )
-    
+
     validation_loss_history = []
     training_loss_history = []
     sigma_history = []
-    
+
     def get_val(key):
         """Get parameter value, handling both dict and tensor cases."""
         v = sigma_params.get(key)
         return abs(v) if isinstance(v, (int, float)) else v
-    
+
     def compute_validation_loss(deformation_field_to_use):
         """Compute validation loss with current sigma parameters."""
         val_loss = 0.0
         with torch.no_grad():
-            for batch_config_path, batch_indices in zip(batch_config_paths, batch_particle_indices, strict=True):
-                batch_refine_manager = _make_differentiable_refine_manager(batch_config_path)
+            for batch_config_path, batch_indices in zip(
+                batch_config_paths, batch_particle_indices, strict=True
+            ):
+                batch_refine_manager = _make_differentiable_refine_manager(
+                    batch_config_path
+                )
                 batch_particle_stack = batch_refine_manager.particle_stack
                 batch_size = len(batch_indices[0])
-                
-                image_stack_batch = batch_particle_stack.construct_image_stack_from_movie(
-                    movie=image, deformation_field=deformation_field_to_use,
-                    pos_reference="top-left", handle_bounds="pad",
-                    padding_mode="reflect", padding_value=0.0,
-                    pre_exposure=pre_exposure, fluence_per_frame=fluence_per_frame
+
+                image_stack_batch = (
+                    batch_particle_stack.construct_image_stack_from_movie(
+                        movie=image,
+                        deformation_field=deformation_field_to_use,
+                        pos_reference="top-left",
+                        handle_bounds="pad",
+                        padding_mode="reflect",
+                        padding_value=0.0,
+                        pre_exposure=pre_exposure,
+                        fluence_per_frame=fluence_per_frame,
+                    )
                 )
-                
+
                 # Reuse pre-computed mean/std stacks (same as motion loop)
                 batch_mean_stack = batch_mean_stacks[batch_config_path]
                 batch_std_stack = batch_std_stacks[batch_config_path]
-                
-                backend_kwargs = batch_refine_manager.make_backend_core_function_kwargs(
-                    image_stack=image_stack_batch,
-                    mean_stack=batch_mean_stack,
-                    std_stack=batch_std_stack,
-                    particle_indices=batch_indices,
-                    template_tensor=validation_template,
-                    images_are_particles=True,
+
+                backend_kwargs = (
+                    batch_refine_manager.make_differentiable_backend_kwargs(
+                        image_stack=image_stack_batch,
+                        mean_stack=batch_mean_stack,
+                        std_stack=batch_std_stack,
+                        particle_indices=batch_indices,
+                        template_tensor=validation_template,
+                        images_are_particles=True,
+                    )
                 )
-                result = batch_refine_manager.get_refine_result(backend_kwargs, correlation_batch_size)
-                
-                val_loss_tensor = result["refined_z_score"] if loss_metric == "scaled_mip" else result["refined_cross_correlation"]
-                val_loss += -torch.mean(val_loss_tensor).item() * batch_size / total_n_particles
-                
-                del image_stack_batch, batch_mean_stack, batch_std_stack, backend_kwargs, result
+                result = batch_refine_manager.get_refine_result(
+                    backend_kwargs, correlation_batch_size, use_differentiable=True
+                )
+
+                val_loss_tensor = (
+                    result["refined_z_score"]
+                    if loss_metric == "scaled_mip"
+                    else result["refined_cross_correlation"]
+                )
+                val_loss += (
+                    -torch.mean(val_loss_tensor).item() * batch_size / total_n_particles
+                )
+
+                del (
+                    image_stack_batch,
+                    batch_mean_stack,
+                    batch_std_stack,
+                    backend_kwargs,
+                    result,
+                )
                 torch.cuda.empty_cache()
         return val_loss
-    
+
     def run_inner_optimization():
         """Run inner motion optimization loop with current sigma parameters."""
-        # Load template volume once (same for all batches)
-        template_volume = load_template_volume_from_config(refine_config_path)
-        
+
         # Initialize deformation field
         if initial_deformation_field is None:
             deformation_field_data = torch.zeros(
@@ -1983,10 +2153,12 @@ def optimize_sigmas_2dtm_optuna(
                 deformation_field_data, dim=(1, 2, 3), keepdim=True
             )
             deformation_field_data = deformation_field_data.clone().detach().requires_grad_(True)
-        
+
         deformation_field = CubicCatmullRomGrid3d.from_grid_data(deformation_field_data).to(device)
-        motion_optimizer = torch.optim.Adam(deformation_field.parameters(), lr=optimizer_kwargs["lr"])
-        
+        motion_optimizer = torch.optim.Adam(
+            deformation_field.parameters(), lr=optimizer_kwargs["lr"]
+        )
+
         # Setup prior params
         if prior_type == "laplacian":
             spatial_spacing, temporal_spacing = _compute_physical_spacing(
@@ -2028,43 +2200,59 @@ def optimize_sigmas_2dtm_optuna(
             else:
                 sa = get_val("sigma_A")
                 sigma_A_norm = _normalize_sigma_fluence(
-                    sa, fluence_per_frame * image.shape[0], deformation_field_resolution[0]
+                    sa,
+                    fluence_per_frame * image.shape[0],
+                    deformation_field_resolution[0],
                 )
-        
+
         # Inner loop: motion optimization
         accumulated_loss = 0.0
         for _ in range(motion_iterations):
             motion_optimizer.zero_grad()
             batch_accumulated_loss = 0.0
-            
-            for batch_config_path, batch_indices in zip(batch_config_paths, batch_particle_indices, strict=True):
-                batch_refine_manager = _make_differentiable_refine_manager(batch_config_path)
+
+            for batch_config_path, batch_indices in zip(
+                batch_config_paths, batch_particle_indices, strict=True
+            ):
+                batch_refine_manager = _make_differentiable_refine_manager(
+                    batch_config_path
+                )
                 batch_particle_stack = batch_refine_manager.particle_stack
                 batch_size = len(batch_indices[0])
-                
-                image_stack_batch = batch_particle_stack.construct_image_stack_from_movie(
-                    movie=image, deformation_field=deformation_field,
-                    pos_reference="top-left", handle_bounds="pad",
-                    padding_mode="reflect", padding_value=0.0,
-                    pre_exposure=pre_exposure, fluence_per_frame=fluence_per_frame
+
+                image_stack_batch = (
+                    batch_particle_stack.construct_image_stack_from_movie(
+                        movie=image,
+                        deformation_field=deformation_field,
+                        pos_reference="top-left",
+                        handle_bounds="pad",
+                        padding_mode="reflect",
+                        padding_value=0.0,
+                        pre_exposure=pre_exposure,
+                        fluence_per_frame=fluence_per_frame,
+                    )
                 )
-                
+
                 # Reuse pre-computed mean/std stacks
                 batch_mean_stack = batch_mean_stacks[batch_config_path]
                 batch_std_stack = batch_std_stacks[batch_config_path]
-                
-                backend_kwargs = batch_refine_manager.make_backend_core_function_kwargs(
-                    image_stack=image_stack_batch,
-                    mean_stack=batch_mean_stack,
-                    std_stack=batch_std_stack,
-                    particle_indices=batch_indices,
-                    template_tensor=template_volume,
-                    images_are_particles=True,
+
+                backend_kwargs = (
+                    batch_refine_manager.make_differentiable_backend_kwargs(
+                        image_stack=image_stack_batch,
+                        mean_stack=batch_mean_stack,
+                        std_stack=batch_std_stack,
+                        particle_indices=batch_indices,
+                        template_tensor=template_volume,
+                        images_are_particles=True,
+                    )
                 )
-                result = batch_refine_manager.get_refine_result(backend_kwargs, correlation_batch_size)
-                
+                result = batch_refine_manager.get_refine_result(
+                    backend_kwargs, correlation_batch_size, use_differentiable=True
+                )
+
                 loss_tensor = result["refined_z_score"] if loss_metric == "scaled_mip" else result["refined_cross_correlation"]
-                
+
                 if prior_type == "laplacian":
                     E_space, E_time = laplacian_compute(
                         deformation_field._data, sigma_A_tensor, alpha, spatial_spacing, temporal_spacing
@@ -2073,30 +2261,36 @@ def optimize_sigmas_2dtm_optuna(
                     E_space, E_time = relion2019_compute(
                         deformation_field._data, image_coords, sigma_D_val, sigma_V_norm, sigma_A_norm
                     )
-                
+
                 E_space = E_space * batch_size / total_n_particles
                 E_time = E_time * batch_size / total_n_particles
                 E_obs = -2 * torch.mean(loss_tensor) * batch_size / total_n_particles
-                
+
                 batch_loss = E_obs + E_space + E_time
                 batch_accumulated_loss += batch_loss.item()
                 batch_loss.backward()
-                
-                del image_stack_batch, batch_mean_stack, batch_std_stack, backend_kwargs, result
+
+                del (
+                    image_stack_batch,
+                    batch_mean_stack,
+                    batch_std_stack,
+                    backend_kwargs,
+                    result,
+                )
                 torch.cuda.empty_cache()
-            
+
             motion_optimizer.step()
             accumulated_loss += batch_accumulated_loss
-        
+
         return deformation_field, accumulated_loss
-    
+
     # Objective function for Optuna
     def objective(trial):
         """Objective function for Optuna optimization."""
         # Suggest parameter values using log-uniform for wide ranges
         for param_name in param_names:
             initial_val = initial_values[param_name]
-            
+
             # Use log-uniform for parameters that span orders of magnitude
             if param_name == "alpha_spatial" or param_name == "sigma_D":
                 # These span large ranges, use log-uniform
@@ -2114,43 +2308,43 @@ def optimize_sigmas_2dtm_optuna(
                     high=initial_val * param_range_high,
                     log=False
                 )
-            
+
             sigma_params[param_name] = suggested_val
-        
+
         # Run inner optimization with suggested sigmas
         deformation_field, accumulated_loss = run_inner_optimization()
-        
+
         # Compute validation loss
         validation_loss = compute_validation_loss(deformation_field)
-        
+
         # Track history
         validation_loss_history.append(validation_loss)
         training_loss_history.append(accumulated_loss)
-        
+
         # Record current sigmas (include fixed parameters too)
         current_sigmas = sigma_params.copy()
         sigma_history.append(current_sigmas.copy())
-        
+
         if verbose:
             print(f"Trial {trial.number}: Parameters: {dict(zip(param_names, [sigma_params[n] for n in param_names]))}")
             print(f"  Validation loss: {validation_loss:.6f}")
-        
+
         return validation_loss
-    
+
     try:
         # Create Optuna study
         if sampler is None:
             sampler = optuna.samplers.TPESampler(seed=42)
         if pruner is None:
             pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=10)
-        
+
         study = optuna.create_study(
             study_name=study_name,
             sampler=sampler,
             pruner=pruner,
             direction=direction,
         )
-        
+
         if verbose:
             print("=" * 70)
             print("OPTUNA SIGMA OPTIMIZATION")
@@ -2160,10 +2354,10 @@ def optimize_sigmas_2dtm_optuna(
             print(f"Sampler: {type(sampler).__name__}")
             print(f"Pruner: {type(pruner).__name__}")
             print("=" * 70)
-        
+
         # Run optimization
         study.optimize(objective, n_trials=n_trials, show_progress_bar=verbose)
-        
+
         if verbose:
             print("\n" + "=" * 70)
             print("OPTUNA OPTIMIZATION COMPLETE")
@@ -2174,19 +2368,19 @@ def optimize_sigmas_2dtm_optuna(
             for name, val in study.best_params.items():
                 print(f"  {name}: {val:.6f}")
             print("=" * 70)
-        
+
         # Extract best parameters
         best_params = study.best_params
         for name, val in best_params.items():
             sigma_params[name] = val
-        
+
         # Get final deformation field with best parameters
         deformation_field, _ = run_inner_optimization()
         final_deformation_field = deformation_field.data
         final_deformation_field = final_deformation_field - torch.mean(
             final_deformation_field, dim=(1, 2, 3), keepdim=True
         )
-        
+
         # Create optimized_sigmas from best trial parameters (explicitly use best validation loss)
         optimized_sigmas = {}
         # Include all parameters (both optimized and fixed)
@@ -2200,15 +2394,14 @@ def optimize_sigmas_2dtm_optuna(
                     sigma_params[key].item() if isinstance(sigma_params[key], torch.Tensor)
                     else sigma_params[key]
                 )
-        
+
     finally:
         if temp_dir.exists():
             shutil.rmtree(temp_dir)
             if verbose:
                 print(f"Cleaned up temporary configs at {temp_dir}")
-    
+
     # Save results to files if paths are specified
-    import json
     if optimized_sigmas_output_path is not None:
         with open(optimized_sigmas_output_path, 'w', encoding='utf-8') as f:
             json.dump(optimized_sigmas, f, indent=2)
@@ -2232,7 +2425,7 @@ def optimize_sigmas_2dtm_optuna(
             json.dump(validation_loss_history, f, indent=2)
         if verbose:
             print(f"Saved validation history to: {validation_history_output_path}")
-    
+
     result_dict = {
         "optimized_sigmas": optimized_sigmas,
         "final_deformation_field": final_deformation_field,
@@ -2244,388 +2437,7 @@ def optimize_sigmas_2dtm_optuna(
         "best_sigma_params": study.best_params,
         "optuna_study": study,  # For further analysis/visualization
     }
-    
+
     return result_dict
 
 
-# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
-
-# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
-def optimize_sigmas_2dtm_multi_start(
-    image: torch.Tensor,  # (t, H, W)
-    var_image: torch.Tensor,
-    mean_image: torch.Tensor,
-    pixel_spacing: float,
-    deformation_field_resolution: tuple[int, int, int],  # (nt, nh, nw)
-    initial_deformation_field: torch.Tensor | None,  # (yx, nt, nh, nw)
-    refine_config_path: str,
-    validation_template_path: str,
-    pre_exposure: float = 0.0,
-    fluence_per_frame: float = 1.0,
-    motion_iterations: int = 10,
-    sigma_iterations: int = 20,
-    optimizer_kwargs: dict[str, Any] | None = None,
-    sigma_optimizer_kwargs: dict[str, Any] | None = None,
-    correlation_batch_size: int = 20,
-    particle_batch_size: int = 102,
-    particle_indices: pd.Index = None,
-    device: torch.device = None,
-    loss_metric: str = "scaled_mip",
-    min_snr: float = 0.0,
-    best_n: int = 10000000000,
-    prior_type: str = "relion",
-    init_sigma_A: float = 0.88,
-    init_alpha_spatial: float = 1e5,
-    init_sigma_A_amplitude: float = 2.0,
-    init_sigma_A_decay: float = 0.1,
-    init_sigma_A_offset: float = 1.0,
-    sigma_A_exponential: bool = False,
-    init_sigma_D: float = 5080.0,
-    init_sigma_V: float = 0.58,
-    optimize_sigma_A: bool = True,
-    optimize_alpha_spatial: bool = True,
-    optimize_sigma_A_amplitude: bool = True,
-    optimize_sigma_A_decay: bool = True,
-    optimize_sigma_A_offset: bool = True,
-    optimize_sigma_D: bool = True,
-    optimize_sigma_V: bool = True,
-    # Multi-start parameters
-    n_values_per_param: int = 3,  # Number of values to try per parameter (default 3: 0.5x, 1x, 2x)
-    exploration_factors: tuple[float, ...] = (0.5, 1.0, 2.0),  # Multipliers for initial values
-    verbose: bool = True,
-    # Output paths for saving results
-    optimized_sigmas_output_path: str | None = None,
-    sigma_history_output_path: str | None = None,
-    training_history_output_path: str | None = None,
-    validation_history_output_path: str | None = None,
-) -> dict[str, Any]:
-    """Optimize prior hyperparameters using multi-start grid search.
-    
-    This function performs a two-stage optimization:
-    1. Quick grid search: Tests multiple initial sigma combinations with 1 sigma_iteration each
-    2. Full optimization: Runs full optimization from the best starting point found in stage 1
-    
-    This approach helps escape local minima by exploring a wide parameter space first.
-    
-    Parameters
-    ----------
-    image : torch.Tensor
-        (t, H, W) movie to estimate motion from
-    var_image : torch.Tensor
-        (t, H, W) variance image
-    mean_image : torch.Tensor
-        (t, H, W) mean image
-    pixel_spacing : float
-        Pixel spacing in Angstroms
-    deformation_field_resolution : tuple[int, int, int]
-        Resolution of deformation field (nt, nh, nw)
-    initial_deformation_field : torch.Tensor | None
-        Initial deformation field (2, nt, nh, nw) or None
-    refine_config_path : str
-        Path to refine config (training template)
-    validation_template_path : str
-        Path to validation template (.mrc) for computing validation loss
-    motion_iterations : int
-        Motion optimization iterations per sigma update. Default 10
-    sigma_iterations : int
-        Number of sigma optimization iterations for final optimization. Default 20
-    optimizer_kwargs : dict
-        Kwargs for motion optimizer. Default {"lr": 0.2}
-    sigma_optimizer_kwargs : dict
-        Kwargs for sigma optimizer. Default {"lr": 0.01}
-    prior_type : str
-        "laplacian" or "relion". Default "relion"
-    init_sigma_A : float
-        Initial sigma_A (constant mode). Default 0.88
-    init_alpha_spatial : float
-        Initial alpha_spatial. Default 1e5
-    init_sigma_A_amplitude : float
-        Initial A in exponential. Default 2.0
-    init_sigma_A_decay : float
-        Initial B in exponential. Default 0.1
-    init_sigma_A_offset : float
-        Initial C in exponential. Default 1.0
-    sigma_A_exponential : bool
-        Use exponential sigma_A. Default False
-    init_sigma_D : float
-        Initial sigma_D. Default 5080.0
-    init_sigma_V : float
-        Initial sigma_V. Default 0.58
-    optimize_sigma_A : bool
-        Whether to optimize sigma_A. Default True
-    optimize_alpha_spatial : bool
-        Whether to optimize alpha_spatial. Default True
-    optimize_sigma_A_amplitude : bool
-        Whether to optimize sigma_A_amplitude. Default True
-    optimize_sigma_A_decay : bool
-        Whether to optimize sigma_A_decay. Default True
-    optimize_sigma_A_offset : bool
-        Whether to optimize sigma_A_offset. Default True
-    optimize_sigma_D : bool
-        Whether to optimize sigma_D. Default True
-    optimize_sigma_V : bool
-        Whether to optimize sigma_V. Default True
-    n_values_per_param : int
-        Number of values to try per parameter. Default 3
-    exploration_factors : tuple[float, ...]
-        Multipliers for initial values. Default (0.5, 1.0, 2.0)
-    verbose : bool
-        Print progress. Default True
-    optimized_sigmas_output_path : str | None
-        Path to save final optimized sigmas as JSON. Default None
-    sigma_history_output_path : str | None
-        Path to save sigma history (all iterations) as JSON. Default None
-    training_history_output_path : str | None
-        Path to save training loss history as JSON. Default None
-    validation_history_output_path : str | None
-        Path to save validation loss history as JSON. Default None
-        
-    Returns
-    -------
-    dict
-        - "optimized_sigmas": dict of optimized sigma values
-        - "final_deformation_field": final deformation field
-        - "validation_loss_history": list of validation losses
-        - "training_loss_history": list of training losses
-        - "sigma_history": list of sigma values at each iteration
-        - "grid_search_results": list of (params, validation_loss) from grid search
-    """
-    # Determine which parameters to optimize
-    params_to_optimize = {}
-    
-    if sigma_A_exponential:
-        if optimize_sigma_A_amplitude:
-            params_to_optimize["sigma_A_amplitude"] = init_sigma_A_amplitude
-        if optimize_sigma_A_decay:
-            params_to_optimize["sigma_A_decay"] = init_sigma_A_decay
-        if optimize_sigma_A_offset:
-            params_to_optimize["sigma_A_offset"] = init_sigma_A_offset
-    else:
-        if optimize_sigma_A:
-            params_to_optimize["sigma_A"] = init_sigma_A
-    
-    if prior_type == "laplacian" and optimize_alpha_spatial:
-        params_to_optimize["alpha_spatial"] = init_alpha_spatial
-    
-    if prior_type == "relion":
-        if optimize_sigma_D:
-            params_to_optimize["sigma_D"] = init_sigma_D
-        if optimize_sigma_V:
-            params_to_optimize["sigma_V"] = init_sigma_V
-    
-    if len(params_to_optimize) == 0:
-        raise ValueError("No sigma parameters selected for optimization!")
-    
-    if verbose:
-        print("=" * 70)
-        print("MULTI-START SIGMA OPTIMIZATION")
-        print(f"Parameters to optimize: {list(params_to_optimize.keys())}")
-        print(f"Values per parameter: {n_values_per_param}")
-        print(f"Exploration factors: {exploration_factors}")
-        total_combinations = len(exploration_factors) ** len(params_to_optimize)
-        print(f"Total combinations to test: {total_combinations}")
-        print("=" * 70)
-    
-    # Generate all combinations
-    param_names = list(params_to_optimize.keys())
-    param_values = [
-        [init_val * factor for factor in exploration_factors]
-        for init_val in params_to_optimize.values()
-    ]
-    
-    all_combinations = list(itertools.product(*param_values))
-    
-    if verbose:
-        print(f"\nStage 1: Quick grid search ({len(all_combinations)} combinations)")
-        print("Running 1 sigma_iteration per combination...")
-    
-    # Stage 1: Quick grid search with 1 sigma_iteration each
-    grid_search_results = []
-    best_combination = None
-    best_validation_loss = float('inf')
-    
-    temp_dir = Path(tempfile.mkdtemp(prefix="ripple_multi_start_"))
-    
-    try:
-        for combo_idx, combination in enumerate(all_combinations):
-            if verbose:
-                print(f"\n[{combo_idx + 1}/{len(all_combinations)}] Testing combination:")
-                for name, value in zip(param_names, combination, strict=True):
-                    print(f"  {name}: {value:.6f}")
-            
-            # Build kwargs for this combination
-            combo_kwargs = {}
-            for name, value in zip(param_names, combination, strict=True):
-                if name == "sigma_A":
-                    combo_kwargs["init_sigma_A"] = value
-                elif name == "alpha_spatial":
-                    combo_kwargs["init_alpha_spatial"] = value
-                elif name == "sigma_A_amplitude":
-                    combo_kwargs["init_sigma_A_amplitude"] = value
-                elif name == "sigma_A_decay":
-                    combo_kwargs["init_sigma_A_decay"] = value
-                elif name == "sigma_A_offset":
-                    combo_kwargs["init_sigma_A_offset"] = value
-                elif name == "sigma_D":
-                    combo_kwargs["init_sigma_D"] = value
-                elif name == "sigma_V":
-                    combo_kwargs["init_sigma_V"] = value
-            
-            # Run quick evaluation (1 sigma_iteration)
-            temp_output_dir = temp_dir / f"combo_{combo_idx}"
-            temp_output_dir.mkdir(exist_ok=True)
-            
-            try:
-                result = optimize_sigmas_2dtm_bayesian(
-                    image=image,
-                    var_image=var_image,
-                    mean_image=mean_image,
-                    pixel_spacing=pixel_spacing,
-                    deformation_field_resolution=deformation_field_resolution,
-                    initial_deformation_field=initial_deformation_field,
-                    refine_config_path=refine_config_path,
-                    validation_template_path=validation_template_path,
-                    pre_exposure=pre_exposure,
-                    fluence_per_frame=fluence_per_frame,
-                    motion_iterations=motion_iterations,
-                    sigma_iterations=1,  # Quick evaluation
-                    optimizer_kwargs=optimizer_kwargs,
-                    sigma_optimizer_kwargs=sigma_optimizer_kwargs,
-                    correlation_batch_size=correlation_batch_size,
-                    particle_batch_size=particle_batch_size,
-                    particle_indices=particle_indices,
-                    device=device,
-                    loss_metric=loss_metric,
-                    min_snr=min_snr,
-                    best_n=best_n,
-                    prior_type=prior_type,
-                    sigma_A_exponential=sigma_A_exponential,
-                    optimize_sigma_A=optimize_sigma_A,
-                    optimize_alpha_spatial=optimize_alpha_spatial,
-                    optimize_sigma_A_amplitude=optimize_sigma_A_amplitude,
-                    optimize_sigma_A_decay=optimize_sigma_A_decay,
-                    optimize_sigma_A_offset=optimize_sigma_A_offset,
-                    optimize_sigma_D=optimize_sigma_D,
-                    optimize_sigma_V=optimize_sigma_V,
-                    perturbation_interval=0,  # Disable perturbation for quick search
-                    verbose=False,  # Reduce verbosity for grid search
-                    optimized_sigmas_output_path=None,  # Don't save intermediate results
-                    sigma_history_output_path=None,
-                    training_history_output_path=None,
-                    validation_history_output_path=None,
-                    **combo_kwargs,
-                )
-                
-                # Get final validation loss
-                final_val_loss = result["validation_loss_history"][-1]
-                grid_search_results.append({
-                    "params": dict(zip(param_names, combination, strict=True)),
-                    "validation_loss": final_val_loss,
-                })
-                
-                if verbose:
-                    print(f"  Validation loss: {final_val_loss:.6f}")
-                
-                if final_val_loss < best_validation_loss:
-                    best_validation_loss = final_val_loss
-                    best_combination = dict(zip(param_names, combination, strict=True))
-                    if verbose:
-                        print(f"  ✓ New best!")
-                
-            except Exception as e:
-                if verbose:
-                    print(f"  ✗ Error: {e}")
-                grid_search_results.append({
-                    "params": dict(zip(param_names, combination, strict=True)),
-                    "validation_loss": float('inf'),
-                    "error": str(e),
-                })
-        
-        if best_combination is None:
-            raise RuntimeError("All grid search combinations failed!")
-        
-        if verbose:
-            print("\n" + "=" * 70)
-            print("Stage 1 complete: Best starting point found")
-            print("Best combination:")
-            for name, value in best_combination.items():
-                print(f"  {name}: {value:.6f}")
-            print(f"Best validation loss: {best_validation_loss:.6f}")
-            print("=" * 70)
-            print(f"\nStage 2: Full optimization ({sigma_iterations} sigma_iterations)")
-            print("Running full optimization from best starting point...")
-        
-        # Stage 2: Full optimization from best starting point
-        best_kwargs = {}
-        for name, value in best_combination.items():
-            if name == "sigma_A":
-                best_kwargs["init_sigma_A"] = value
-            elif name == "alpha_spatial":
-                best_kwargs["init_alpha_spatial"] = value
-            elif name == "sigma_A_amplitude":
-                best_kwargs["init_sigma_A_amplitude"] = value
-            elif name == "sigma_A_decay":
-                best_kwargs["init_sigma_A_decay"] = value
-            elif name == "sigma_A_offset":
-                best_kwargs["init_sigma_A_offset"] = value
-            elif name == "sigma_D":
-                best_kwargs["init_sigma_D"] = value
-            elif name == "sigma_V":
-                best_kwargs["init_sigma_V"] = value
-        
-        final_result = optimize_sigmas_2dtm_bayesian(
-            image=image,
-            var_image=var_image,
-            mean_image=mean_image,
-            pixel_spacing=pixel_spacing,
-            deformation_field_resolution=deformation_field_resolution,
-            initial_deformation_field=initial_deformation_field,
-            refine_config_path=refine_config_path,
-            validation_template_path=validation_template_path,
-            pre_exposure=pre_exposure,
-            fluence_per_frame=fluence_per_frame,
-            motion_iterations=motion_iterations,
-            sigma_iterations=sigma_iterations,  # Full optimization
-            optimizer_kwargs=optimizer_kwargs,
-            sigma_optimizer_kwargs=sigma_optimizer_kwargs,
-            correlation_batch_size=correlation_batch_size,
-            particle_batch_size=particle_batch_size,
-            particle_indices=particle_indices,
-            device=device,
-            loss_metric=loss_metric,
-            min_snr=min_snr,
-            best_n=best_n,
-            prior_type=prior_type,
-            sigma_A_exponential=sigma_A_exponential,
-            optimize_sigma_A=optimize_sigma_A,
-            optimize_alpha_spatial=optimize_alpha_spatial,
-            optimize_sigma_A_amplitude=optimize_sigma_A_amplitude,
-            optimize_sigma_A_decay=optimize_sigma_A_decay,
-            optimize_sigma_A_offset=optimize_sigma_A_offset,
-            optimize_sigma_D=optimize_sigma_D,
-            optimize_sigma_V=optimize_sigma_V,
-            perturbation_interval=0,  # Can enable if desired
-            verbose=verbose,
-            optimized_sigmas_output_path=optimized_sigmas_output_path,
-            sigma_history_output_path=sigma_history_output_path,
-            training_history_output_path=training_history_output_path,
-            validation_history_output_path=validation_history_output_path,
-            **best_kwargs,
-        )
-        
-        # Add grid search results to final output
-        final_result["grid_search_results"] = grid_search_results
-        final_result["best_starting_point"] = best_combination
-        
-        if verbose:
-            print("\n" + "=" * 70)
-            print("MULTI-START OPTIMIZATION COMPLETE")
-            print("=" * 70)
-        
-        return final_result
-        
-    finally:
-        if temp_dir.exists():
-            shutil.rmtree(temp_dir)
-            if verbose:
-                print(f"Cleaned up temporary directory: {temp_dir}")

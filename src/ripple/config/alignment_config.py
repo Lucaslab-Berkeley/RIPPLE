@@ -137,6 +137,12 @@ class PolishParticlesConfig(BaseAlignmentConfig):
     optimize_sigmas: bool
         Whether to optimize sigma hyperparameters using a validation template.
         Default is False.
+    optimize_algorithm: Literal["gradient", "nelder-mead", "bayesian"]
+        Algorithm to use for sigma optimization. Options are:
+        - 'gradient': Gradient-based optimization
+        - 'nelder-mead': Nelder-Mead (simplex) method
+        - 'bayesian': Bayesian optimization using Optuna
+        Default is 'gradient'.
     validation_template_path: str | None
         Path to validation template (.mrc) for sigma optimization.
         Required if optimize_sigmas is True.
@@ -144,6 +150,28 @@ class PolishParticlesConfig(BaseAlignmentConfig):
         Number of outer loop iterations for sigma optimization. Default is 20.
     motion_iterations: int
         Number of inner loop motion iterations per sigma update. Default is 10.
+    init_sigma_A: float
+        Initial sigma_A (temporal smoothness) for constant mode. Default is 0.513517.
+    init_alpha_spatial: float
+        Initial alpha_spatial (spatial smoothness strength for Laplacian prior).
+        Default is 1e5.
+    init_sigma_A_amplitude: float
+        Initial amplitude A in exponential sigma_A formula: A*exp(-B*fluence) + C.
+        Default is 2.0.
+    init_sigma_A_decay: float
+        Initial decay rate B in exponential sigma_A formula: A*exp(-B*fluence) + C.
+        Default is 0.1.
+    init_sigma_A_offset: float
+        Initial constant offset C in exponential sigma_A formula: A*exp(-B*fluence) + C.
+        Default is 1.0.
+    sigma_A_exponential: bool
+        Whether to use exponential decay for sigma_A over frames. Default is False.
+    init_sigma_D: float
+        Initial sigma_D (spatial correlation length in Angstroms for RELION prior).
+        Default is 5782.376953.
+    init_sigma_V: float
+        Initial sigma_V (velocity magnitude scale in Å per unit fluence for
+        RELION prior). Default is 0.194826.
     """
 
     particle_df_path: str
@@ -151,9 +179,19 @@ class PolishParticlesConfig(BaseAlignmentConfig):
     min_snr: float = 0.0
     best_n: PositiveInt = 10000000000
     optimize_sigmas: bool = False
+    optimize_algorithm: Literal["gradient", "nelder-mead", "bayesian"] = "bayesian"
     validation_template_path: str | None = None
-    sigma_iterations: PositiveInt = 20
-    motion_iterations: PositiveInt = 10
+    sigma_iterations: PositiveInt = 50
+    motion_iterations: PositiveInt = 20
+    # Initial sigma hyperparameters for optimization
+    init_sigma_A: float = 0.513517
+    init_alpha_spatial: float = 1e5
+    init_sigma_A_amplitude: float = 2.0
+    init_sigma_A_decay: float = 0.1
+    init_sigma_A_offset: float = 1.0
+    sigma_A_exponential: bool = False
+    init_sigma_D: float = 5782.376953
+    init_sigma_V: float = 0.194826
     # Output paths for sigma optimization results
     optimized_sigmas_output_path: str | None = None
     sigma_history_output_path: str | None = None
