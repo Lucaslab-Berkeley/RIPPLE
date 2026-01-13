@@ -47,7 +47,7 @@ dependencies = [
     "pyyaml",
     "tqdm",
     "types-PyYAML",
-    "torch-motion-correction",
+    "torch-motion-correction>=0.0.5",
     "torch-fourier-filter",
     "leopard-em",
     "scipy",

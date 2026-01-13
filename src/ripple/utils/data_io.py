@@ -301,10 +301,9 @@ def load_template_volume_from_config(
             f"template_volume_path not found in config file: {refine_config_path}"
         )
 
-    # Resolve relative paths relative to the config file location
-    config_dir = Path(refine_config_path).parent
+    # Resolve relative paths relative to current working directory
     if not Path(template_volume_path).is_absolute():
-        template_volume_path = str(config_dir / template_volume_path)
+        template_volume_path = str(Path(template_volume_path).resolve())
 
     # Read MRC file and convert to float32 tensor
     template_volume = read_mrc_to_tensor(template_volume_path)

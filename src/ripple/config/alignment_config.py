@@ -167,9 +167,12 @@ class OptimizationConfig(BaseModelRIPPLE):
         - 'nelder-mead': Nelder-Mead (simplex) method
         - 'bayesian': Bayesian optimization using Optuna
         Default is 'bayesian'.
-    validation_template_path: str
-        Path to validation template (.mrc) for sigma optimization.
-        Required for sigma optimization.
+    optimize_particle_df_path: str | None
+        Path to particle dataframe config for validation loss computation.
+        The validation template will be loaded from the template_volume_path
+        in this YAML file. If None, uses the same particle dataframe and
+        template as the motion loop.
+        Default is None.
     sigma_iterations: int
         Number of outer loop iterations for sigma optimization. Default is 50.
     motion_iterations: int
@@ -185,7 +188,7 @@ class OptimizationConfig(BaseModelRIPPLE):
     """
 
     optimize_algorithm: Literal["nelder-mead", "bayesian"] = "bayesian"
-    validation_template_path: str
+    optimize_particle_df_path: str | None = None
     sigma_iterations: PositiveInt = 50
     motion_iterations: PositiveInt = 20
     optimized_sigmas_output_path: str | None = None

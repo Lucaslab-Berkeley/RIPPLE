@@ -118,10 +118,9 @@ def _filter_particles_by_quality(
 
     csv_path = config["particle_stack"]["df_path"]
 
-    # Resolve relative paths
-    config_dir = Path(refine_config_path).parent
+    # Resolve relative paths relative to current working directory
     if not Path(csv_path).is_absolute():
-        csv_path = str(config_dir / csv_path)
+        csv_path = str(Path(csv_path).resolve())
 
     # Load the particle dataframe
     df = pd.read_csv(csv_path, index_col=0)
@@ -162,11 +161,11 @@ def _filter_particles_by_quality(
     filtered_config["particle_stack"] = config["particle_stack"].copy()
     filtered_config["particle_stack"]["df_path"] = str(filtered_csv_path)
 
-    # Resolve template_volume_path to absolute
+    # Resolve template_volume_path to absolute (relative to current working directory)
     if "template_volume_path" in filtered_config:
         template_path = Path(config["template_volume_path"])
         if not template_path.is_absolute():
-            template_path = (config_dir / template_path).resolve()
+            template_path = template_path.resolve()
         filtered_config["template_volume_path"] = str(template_path)
 
     filtered_config_path = temp_dir / "filtered_config.yaml"
@@ -207,16 +206,13 @@ def _create_batch_configs(
     with open(refine_config_path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
-    # Get base directory of original config for resolving relative paths
-    config_base_dir = Path(refine_config_path).parent.resolve()
-
     def resolve_path(path_str: str | None) -> str | None:
-        """Resolve a path relative to the original config directory."""
+        """Resolve a path relative to the current working directory."""
         if path_str is None:
             return None
         path = Path(path_str)
         if not path.is_absolute():
-            path = (config_base_dir / path).resolve()
+            path = path.resolve()
         return str(path)
 
     # Get the CSV path from config and resolve it

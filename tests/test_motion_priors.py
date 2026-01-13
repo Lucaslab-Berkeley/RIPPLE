@@ -281,4 +281,3 @@ def test_create_exponential_sigma_a_minimum_frames():
     # Should have shape (1,)
     assert result.shape == (1,)
     assert result[0] > offset
-

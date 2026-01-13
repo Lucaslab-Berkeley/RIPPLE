@@ -6,7 +6,6 @@ import tempfile
 from pathlib import Path
 from typing import Any, Literal
 
-import mrcfile
 import numpy as np
 import optuna
 import pandas as pd
@@ -48,7 +47,7 @@ def core_optimize_sigmas(
     deformation_field_resolution: tuple[int, int, int],  # (nt, nh, nw)
     initial_deformation_field: torch.Tensor | None,  # (yx, nt, nh, nw)
     refine_config_path: str,
-    validation_template_path: str,
+    optimize_particle_df_path: str | None = None,
     pre_exposure: float = 0.0,
     fluence_per_frame: float = 1.0,
     motion_iterations: int = 10,
@@ -106,8 +105,12 @@ def core_optimize_sigmas(
         Initial deformation field (2, nt, nh, nw) or None
     refine_config_path : str
         Path to refine config (training template)
-    validation_template_path : str
-        Path to validation template (.mrc) for computing validation loss
+    optimize_particle_df_path : str | None
+        Path to particle dataframe config for validation loss computation.
+        The validation template will be loaded from the template_volume_path
+        in this YAML file. If None, uses the same particle dataframe and
+        template as the motion loop.
+        Default is None.
     pre_exposure : float
         Pre-exposure time in seconds. Default 0.0
     fluence_per_frame : float
@@ -192,7 +195,7 @@ def core_optimize_sigmas(
         "deformation_field_resolution": deformation_field_resolution,
         "initial_deformation_field": initial_deformation_field,
         "refine_config_path": refine_config_path,
-        "validation_template_path": validation_template_path,
+        "optimize_particle_df_path": optimize_particle_df_path,
         "pre_exposure": pre_exposure,
         "fluence_per_frame": fluence_per_frame,
         "motion_iterations": motion_iterations,
@@ -252,7 +255,7 @@ def optimize_sigmas_2dtm_nelder_mead(
     deformation_field_resolution: tuple[int, int, int],  # (nt, nh, nw)
     initial_deformation_field: torch.Tensor | None,  # (yx, nt, nh, nw)
     refine_config_path: str,
-    validation_template_path: str,
+    optimize_particle_df_path: str | None = None,
     pre_exposure: float = 0.0,
     fluence_per_frame: float = 1.0,
     motion_iterations: int = 10,
@@ -314,8 +317,12 @@ def optimize_sigmas_2dtm_nelder_mead(
         Initial deformation field (2, nt, nh, nw) or None
     refine_config_path : str
         Path to refine config (training template)
-    validation_template_path : str
-        Path to validation template (.mrc) for computing validation loss
+    optimize_particle_df_path : str | None
+        Path to particle dataframe config for validation loss computation.
+        The validation template will be loaded from the template_volume_path
+        in this YAML file. If None, uses the same particle dataframe and
+        template as the motion loop.
+        Default is None.
     pre_exposure : float
         Pre-exposure time in seconds. Default 0.0
     fluence_per_frame : float
@@ -415,12 +422,17 @@ def optimize_sigmas_2dtm_nelder_mead(
         total_n_particles,
         batch_mean_stacks,
         batch_std_stacks,
+        validation_batch_config_paths,
+        validation_batch_particle_indices,
+        validation_total_n_particles,
+        validation_batch_mean_stacks,
+        validation_batch_std_stacks,
     ) = _setup_optimizer(
         image=image,
         var_image=var_image,
         mean_image=mean_image,
         refine_config_path=refine_config_path,
-        validation_template_path=validation_template_path,
+        optimize_particle_df_path=optimize_particle_df_path,
         particle_indices=particle_indices,
         device=device,
         temp_dir=temp_dir,
@@ -452,6 +464,11 @@ def optimize_sigmas_2dtm_nelder_mead(
     # Explicitly capture variables for closure (helps linter recognize them)
     _batch_mean_stacks = batch_mean_stacks
     _batch_std_stacks = batch_std_stacks
+    _validation_batch_config_paths = validation_batch_config_paths
+    _validation_batch_particle_indices = validation_batch_particle_indices
+    _validation_batch_mean_stacks = validation_batch_mean_stacks
+    _validation_batch_std_stacks = validation_batch_std_stacks
+    _validation_total_n_particles = validation_total_n_particles
     _template_volume = template_volume
     _validation_template = validation_template
 
@@ -504,15 +521,42 @@ def optimize_sigmas_2dtm_nelder_mead(
         )
 
         # Compute validation loss
+        # Use validation batch configs if available,
+        # otherwise use training batch configs
+        val_config_paths = (
+            _validation_batch_config_paths
+            if _validation_batch_config_paths is not None
+            else batch_config_paths
+        )
+        val_particle_indices = (
+            _validation_batch_particle_indices
+            if _validation_batch_particle_indices is not None
+            else batch_particle_indices
+        )
+        val_mean_stacks = (
+            _validation_batch_mean_stacks
+            if _validation_batch_mean_stacks is not None
+            else _batch_mean_stacks
+        )
+        val_std_stacks = (
+            _validation_batch_std_stacks
+            if _validation_batch_std_stacks is not None
+            else _batch_std_stacks
+        )
+        val_total_n_particles = (
+            _validation_total_n_particles
+            if _validation_total_n_particles is not None
+            else total_n_particles
+        )
         validation_loss = _compute_validation_loss_common(
             deformation_field_to_use=deformation_field,
-            batch_config_paths=batch_config_paths,
-            batch_particle_indices=batch_particle_indices,
-            batch_mean_stacks=_batch_mean_stacks,
-            batch_std_stacks=_batch_std_stacks,
+            batch_config_paths=val_config_paths,
+            batch_particle_indices=val_particle_indices,
+            batch_mean_stacks=val_mean_stacks,
+            batch_std_stacks=val_std_stacks,
             image=image,
             validation_template=_validation_template,
-            total_n_particles=total_n_particles,
+            total_n_particles=val_total_n_particles,
             pre_exposure=pre_exposure,
             fluence_per_frame=fluence_per_frame,
             loss_metric=loss_metric,
@@ -684,6 +728,10 @@ def optimize_sigmas_2dtm_nelder_mead(
 
     finally:
         del batch_mean_stacks, batch_std_stacks, template_volume, validation_template
+        if validation_batch_mean_stacks is not None:
+            del validation_batch_mean_stacks
+        if validation_batch_std_stacks is not None:
+            del validation_batch_std_stacks
         gc.collect()
         torch.cuda.empty_cache()
         if temp_dir.exists():
@@ -729,7 +777,7 @@ def optimize_sigmas_2dtm_optuna(
     deformation_field_resolution: tuple[int, int, int],  # (nt, nh, nw)
     initial_deformation_field: torch.Tensor | None,  # (yx, nt, nh, nw)
     refine_config_path: str,
-    validation_template_path: str,
+    optimize_particle_df_path: str | None = None,
     pre_exposure: float = 0.0,
     fluence_per_frame: float = 1.0,
     motion_iterations: int = 10,
@@ -802,8 +850,12 @@ def optimize_sigmas_2dtm_optuna(
         Initial deformation field (2, nt, nh, nw) or None
     refine_config_path : str
         Path to refine config (training template)
-    validation_template_path : str
-        Path to validation template (.mrc) for computing validation loss
+    optimize_particle_df_path : str | None
+        Path to particle dataframe config for validation loss computation.
+        The validation template will be loaded from the template_volume_path
+        in this YAML file. If None, uses the same particle dataframe and
+        template as the motion loop.
+        Default is None.
     pre_exposure : float
         Pre-exposure time in seconds. Default 0.0
     fluence_per_frame : float
@@ -922,12 +974,17 @@ def optimize_sigmas_2dtm_optuna(
         total_n_particles,
         batch_mean_stacks,
         batch_std_stacks,
+        validation_batch_config_paths,
+        validation_batch_particle_indices,
+        validation_total_n_particles,
+        validation_batch_mean_stacks,
+        validation_batch_std_stacks,
     ) = _setup_optimizer(
         image=image,
         var_image=var_image,
         mean_image=mean_image,
         refine_config_path=refine_config_path,
-        validation_template_path=validation_template_path,
+        optimize_particle_df_path=optimize_particle_df_path,
         particle_indices=particle_indices,
         device=device,
         temp_dir=temp_dir,
@@ -974,7 +1031,7 @@ def optimize_sigmas_2dtm_optuna(
             initial_val = initial_values_dict[param_name]
 
             # Use log-uniform for parameters that span orders of magnitude
-            if param_name in ("alpha_spatial", "sigma_D"):
+            if param_name in ("alpha_spatial", "sigma_d"):
                 # These span large ranges, use log-uniform
                 suggested_val = trial.suggest_float(
                     param_name,
@@ -1018,15 +1075,42 @@ def optimize_sigmas_2dtm_optuna(
         )
 
         # Compute validation loss
+        # Use validation batch configs if available,
+        # otherwise use training batch configs
+        val_config_paths = (
+            validation_batch_config_paths
+            if validation_batch_config_paths is not None
+            else batch_config_paths
+        )
+        val_particle_indices = (
+            validation_batch_particle_indices
+            if validation_batch_particle_indices is not None
+            else batch_particle_indices
+        )
+        val_mean_stacks = (
+            validation_batch_mean_stacks
+            if validation_batch_mean_stacks is not None
+            else batch_mean_stacks
+        )
+        val_std_stacks = (
+            validation_batch_std_stacks
+            if validation_batch_std_stacks is not None
+            else batch_std_stacks
+        )
+        val_total_n_particles = (
+            validation_total_n_particles
+            if validation_total_n_particles is not None
+            else total_n_particles
+        )
         validation_loss = _compute_validation_loss_common(
             deformation_field_to_use=deformation_field,
-            batch_config_paths=batch_config_paths,
-            batch_particle_indices=batch_particle_indices,
-            batch_mean_stacks=batch_mean_stacks,
-            batch_std_stacks=batch_std_stacks,
+            batch_config_paths=val_config_paths,
+            batch_particle_indices=val_particle_indices,
+            batch_mean_stacks=val_mean_stacks,
+            batch_std_stacks=val_std_stacks,
             image=image,
             validation_template=validation_template,
-            total_n_particles=total_n_particles,
+            total_n_particles=val_total_n_particles,
             pre_exposure=pre_exposure,
             fluence_per_frame=fluence_per_frame,
             loss_metric=loss_metric,
@@ -1454,7 +1538,7 @@ def _setup_prior_params(
     prior_type : str
         "laplacian" or "relion"
     sigma_a_exponential : bool
-        Whether to use exponential sigma_A
+        Whether to use exponential sigma_a
     sigma_params : dict[str, Any]
         Dictionary of sigma parameters (values can be float or torch.Tensor)
     image : torch.Tensor
@@ -1472,8 +1556,8 @@ def _setup_prior_params(
     -------
     dict[str, Any]
         Dictionary containing prior parameters:
-        - For "laplacian": spatial_spacing, temporal_spacing, sigma_A_tensor, alpha
-        - For "relion": image_coords, sigma_D_val, sigma_V_norm, sigma_A_norm
+        - For "laplacian": spatial_spacing, temporal_spacing, sigma_a_tensor, alpha
+        - For "relion": image_coords, sigma_d_val, sigma_v_norm, sigma_a_norm
     """
 
     def get_val(key: str) -> Any:
@@ -1599,7 +1683,7 @@ def _setup_optimizer(
     var_image: torch.Tensor,
     mean_image: torch.Tensor,
     refine_config_path: str,
-    validation_template_path: str,
+    optimize_particle_df_path: str | None,
     particle_indices: pd.Index | None,
     device: torch.device | None,
     temp_dir: Path,
@@ -1643,6 +1727,11 @@ def _setup_optimizer(
     int,  # total_n_particles
     dict[str, torch.Tensor],  # batch_mean_stacks
     dict[str, torch.Tensor],  # batch_std_stacks
+    list[str] | None,  # validation_batch_config_paths
+    list[list[pd.Index]] | None,  # validation_batch_particle_indices
+    int | None,  # validation_total_n_particles
+    dict[str, torch.Tensor] | None,  # validation_batch_mean_stacks
+    dict[str, torch.Tensor] | None,  # validation_batch_std_stacks
 ]:
     """Set up common components for sigma optimization.
 
@@ -1656,8 +1745,11 @@ def _setup_optimizer(
         (t, H, W) mean image tensor
     refine_config_path : str
         Path to refine config
-    validation_template_path : str
-        Path to validation template (.mrc)
+    optimize_particle_df_path : str | None
+        Path to particle dataframe config for validation loss computation.
+        The validation template will be loaded from the template_volume_path
+        in this YAML file. If None, uses the same particle dataframe and
+        template as the motion loop.
     particle_indices : pd.Index | None
         Particle indices to use
     device : torch.device | None
@@ -1742,11 +1834,21 @@ def _setup_optimizer(
         temp_dir=temp_dir,
     )
 
-    with mrcfile.open(validation_template_path, mode="r") as mrc:
-        validation_template = torch.tensor(
-            mrc.data.copy(), device=device, dtype=torch.float32
+    # Load validation template from optimize_particle_df_path if provided,
+    # otherwise use the training template
+    if optimize_particle_df_path is not None:
+        validation_template = load_template_volume_from_config(
+            optimize_particle_df_path
         )
+    else:
+        validation_template = load_template_volume_from_config(refine_config_path)
+
+    # Load training template
     template_volume = load_template_volume_from_config(refine_config_path)
+
+    # Move validation template to device if needed
+    if device is not None:
+        validation_template = validation_template.to(device)
 
     if optimizer_kwargs is None:
         optimizer_kwargs = {"lr": 0.2}
@@ -1794,6 +1896,33 @@ def _setup_optimizer(
         var_image=var_image,
     )
 
+    # Create validation batch configs if optimize_particle_df_path is provided
+    if optimize_particle_df_path is not None:
+        validation_batch_config_paths, validation_batch_particle_indices = (
+            _create_batch_configs(
+                refine_config_path=optimize_particle_df_path,
+                particle_batch_size=particle_batch_size,
+                temp_dir=temp_dir,
+            )
+        )
+        validation_total_n_particles = sum(
+            len(indices[0]) for indices in validation_batch_particle_indices
+        )
+        validation_batch_mean_stacks, validation_batch_std_stacks = (
+            get_batch_mean_std_stacks(
+                batch_config_paths=validation_batch_config_paths,
+                batch_particle_indices=validation_batch_particle_indices,
+                mean_image=mean_image,
+                var_image=var_image,
+            )
+        )
+    else:
+        validation_batch_config_paths = None
+        validation_batch_particle_indices = None
+        validation_total_n_particles = None
+        validation_batch_mean_stacks = None
+        validation_batch_std_stacks = None
+
     if cleanup_memory:
         torch.cuda.empty_cache()
         gc.collect()
@@ -1815,6 +1944,11 @@ def _setup_optimizer(
         total_n_particles,
         batch_mean_stacks,
         batch_std_stacks,
+        validation_batch_config_paths,
+        validation_batch_particle_indices,
+        validation_total_n_particles,
+        validation_batch_mean_stacks,
+        validation_batch_std_stacks,
     )
 
 
@@ -1883,7 +2017,7 @@ def _run_inner_optimization_common(
     sigma_params : dict[str, Any]
         Dictionary of sigma parameters (values can be float or torch.Tensor)
     sigma_a_exponential : bool
-        Whether to use exponential sigma_A
+        Whether to use exponential sigma_a
 
     Returns
     -------
@@ -2027,12 +2161,12 @@ def _run_inner_optimization_common(
     # Clean up optimizer
     del motion_optimizer, deformation_field_data, deformation_field
     if prior_type == "laplacian":
-        if isinstance(prior_params["sigma_A_tensor"], torch.Tensor):
-            del prior_params["sigma_A_tensor"]
+        if isinstance(prior_params["sigma_a_tensor"], torch.Tensor):
+            del prior_params["sigma_a_tensor"]
     else:
         del prior_params["image_coords"]
-        if isinstance(prior_params["sigma_A_norm"], torch.Tensor):
-            del prior_params["sigma_A_norm"]
+        if isinstance(prior_params["sigma_a_norm"], torch.Tensor):
+            del prior_params["sigma_a_norm"]
 
     gc.collect()
     torch.cuda.empty_cache()

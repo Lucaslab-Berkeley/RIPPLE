@@ -139,26 +139,28 @@ def test_apply_dark_basic(sample_movie, sample_dark_map):
 def test_set_frames_mean_zero(sample_movie):
     """Test that set_frames_mean_zero makes each frame have mean zero."""
     result = set_frames_mean_zero(sample_movie)
-    
+
     # Check that result has same shape
     assert result.shape == sample_movie.shape
-    
+
     # Check that each frame has mean approximately zero
     for frame_idx in range(result.shape[0]):
         frame_mean = torch.mean(result[frame_idx])
-        assert torch.abs(frame_mean) < 1e-5, f"Frame {frame_idx} mean is not zero: {frame_mean}"
+        assert torch.abs(frame_mean) < 1e-5, (
+            f"Frame {frame_idx} mean is not zero: {frame_mean}"
+        )
 
 
 def test_set_frames_mean_zero_preserves_differences(sample_movie):
     """Test that set_frames_mean_zero preserves relative differences within frames."""
     result = set_frames_mean_zero(sample_movie)
-    
+
     # The difference between any two pixels in a frame should be preserved
     # (just shifted by a constant)
     for frame_idx in range(sample_movie.shape[0]):
         original_frame = sample_movie[frame_idx]
         result_frame = result[frame_idx]
-        
+
         # Difference between first two pixels should be the same
         diff_original = original_frame[0, 0] - original_frame[0, 1]
         diff_result = result_frame[0, 0] - result_frame[0, 1]
@@ -170,7 +172,7 @@ def test_remove_hot_pixels_no_hot_pixels(sample_movie):
     """Test remove_hot_pixels with a movie that has no hot pixels."""
     # Use a very high threshold so no pixels are considered hot
     result = remove_hot_pixels(sample_movie, threshold=100.0)
-    
+
     # Should return a tensor of the same shape
     assert result.shape == sample_movie.shape
 
@@ -181,10 +183,10 @@ def test_remove_hot_pixels_with_hot_pixels():
     movie = torch.zeros(2, 10, 10, dtype=torch.float32)
     # Add a hot pixel in the middle of frame 0
     movie[0, 5, 5] = 1000.0  # Very high value
-    
+
     # Use a low threshold to catch the hot pixel
     result = remove_hot_pixels(movie, threshold=3.0)
-    
+
     # The hot pixel should be replaced (not equal to 1000.0)
     assert result[0, 5, 5] != 1000.0
     assert result.shape == movie.shape
@@ -208,10 +210,10 @@ def test_prepare_movie_basic(sample_movie, sample_gain_map, sample_dark_map):
         gain_rot=0,
         multiply_gain=True,
     )
-    
+
     # Should have same shape
     assert result.shape == sample_movie.shape
-    
+
     # Should have mean zero frames (last step in prepare_movie)
     for frame_idx in range(result.shape[0]):
         frame_mean = torch.mean(result[frame_idx])
@@ -228,10 +230,10 @@ def test_prepare_movie_no_gain_no_dark(sample_movie):
         gain_rot=0,
         multiply_gain=True,
     )
-    
+
     # Should have same shape
     assert result.shape == sample_movie.shape
-    
+
     # Should have mean zero frames
     for frame_idx in range(result.shape[0]):
         frame_mean = torch.mean(result[frame_idx])
@@ -250,7 +252,7 @@ def test_prepare_core_skip_preparation(sample_movie):
         multiply_gain=True,
         skip_movie_preparation=True,
     )
-    
+
     # Should return original movie unchanged
     assert torch.allclose(result, sample_movie)
 
@@ -266,12 +268,11 @@ def test_prepare_core_with_preparation(sample_movie, sample_gain_map):
         multiply_gain=True,
         skip_movie_preparation=False,
     )
-    
+
     # Should have same shape
     assert result.shape == sample_movie.shape
-    
+
     # Should have mean zero frames (from prepare_movie)
     for frame_idx in range(result.shape[0]):
         frame_mean = torch.mean(result[frame_idx])
         assert torch.abs(frame_mean) < 1e-5
-

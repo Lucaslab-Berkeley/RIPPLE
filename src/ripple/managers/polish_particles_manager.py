@@ -179,7 +179,7 @@ class PolishParticlesManager(BaseModelRIPPLE):
                 ],
                 initial_deformation_field=core_kwargs["initial_deformation_field"],
                 refine_config_path=core_kwargs["refine_config_path"],
-                validation_template_path=opt_config.validation_template_path,
+                optimize_particle_df_path=opt_config.optimize_particle_df_path,
                 pre_exposure=core_kwargs["pre_exposure"],
                 fluence_per_frame=core_kwargs["fluence_per_frame"],
                 motion_iterations=opt_config.motion_iterations,
