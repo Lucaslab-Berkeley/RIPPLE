@@ -67,14 +67,14 @@ output_config:
 alignment_config:
   # Required: Resolution of deformation field in pixels (x, y, z)
   # Example: [54, 4, 4] for 54 frames, 4x4 grid
-  deformation_field_resolution: [54, 10, 10]
+  deformation_field_resolution: [54, 20, 20]
   
   # Optional: Path to initial deformation field file
   # If not provided, deformation field will be initialized to zero
   deformation_field_path: ../../example/output/def_field.csv
   
   # Number of optimization iterations (default: 100)
-  n_iterations: 50
+  n_iterations: 100
   
   # Type of interpolation grid: "catmull_rom" or "bspline" (default: "catmull_rom")
   grid_type: "catmull_rom"
@@ -103,58 +103,63 @@ alignment_config:
   # Only the top N particles with highest loss_metric values will be selected
   best_n: 10000000000
 
-  # Sigma optimization settings (optional)
-  # Set optimize_sigmas: true to tune prior hyperparameters using a validation template
-  optimize_sigmas: true
+  # Motion prior configuration
+  # Contains all parameters related to motion priors (RELION or Laplacian)
+  prior_config:
+    # Type of prior to use: "relion" or "laplacian" (default: "relion")
+    prior_type: "relion"
+    
+    # Whether to use exponential decay for sigma_A over frames (default: false)
+    sigma_A_exponential: true
+    
+    # Initial sigma_A (temporal smoothness) for constant mode (default: 0.513517)
+    init_sigma_A: 0.45262779342421533
+    
+    # Initial alpha_spatial (spatial smoothness strength for Laplacian prior) (default: 1e5)
+    init_alpha_spatial: 1e5
+    
+    # Initial sigma_D (spatial correlation length in Angstroms for RELION prior) (default: 5782.376953)
+    init_sigma_D: 8391.603615290209
+    
+    # Initial sigma_V (velocity magnitude scale in Å per unit fluence for RELION prior) (default: 0.194826)
+    init_sigma_V: 0.2901410729361167
+    
+    # Initial amplitude A in exponential sigma_A formula: A*exp(-B*fluence) + C (default: 2.0)
+    init_sigma_A_amplitude: 2.0
+    
+    # Initial decay rate B in exponential sigma_A formula: A*exp(-B*fluence) + C (default: 0.1)
+    init_sigma_A_decay: 0.1
+    
+    # Initial constant offset C in exponential sigma_A formula: A*exp(-B*fluence) + C (default: 1.0)
+    init_sigma_A_offset: 1.0
 
-  # Sigma optimization algorithm: "gradient", "nelder-mead", "bayesian" (default: "gradient")
-  optimize_algorithm: "bayesian"
-  
-  # Path to validation template (.mrc) - required if optimize_sigmas is true
-  # Should be different from training template to prevent overfitting
-  validation_template_path: ../../example/maps/60S_map_px0.936_bscale0.5_intro_DW_inside_75A.mrc
-  
-  # Number of outer loop iterations for sigma optimization (default: 50)
-  sigma_iterations: 20
-  
-  # Number of inner loop motion iterations per sigma update (default: 20)
-  motion_iterations: 20
-  
-  # Initial sigma hyperparameters for optimization (optional, defaults shown)
-  # Initial sigma_A (temporal smoothness) for constant mode (default: 0.513517)
-  init_sigma_A: 0.45262779342421533
-  
-  # Initial alpha_spatial (spatial smoothness strength for Laplacian prior) (default: 1e5)
-  init_alpha_spatial: 1e5
-  
-  # Initial amplitude A in exponential sigma_A formula: A*exp(-B*fluence) + C (default: 2.0)
-  init_sigma_A_amplitude: 2.0
-  
-  # Initial decay rate B in exponential sigma_A formula: A*exp(-B*fluence) + C (default: 0.1)
-  init_sigma_A_decay: 0.1
-  
-  # Initial constant offset C in exponential sigma_A formula: A*exp(-B*fluence) + C (default: 1.0)
-  init_sigma_A_offset: 1.0
-  
-  # Whether to use exponential decay for sigma_A over frames (default: false)
-  sigma_A_exponential: false
-  
-  # Initial sigma_D (spatial correlation length in Angstroms for RELION prior) (default: 5782.376953)
-  init_sigma_D: 8391.603615290209
-  
-  # Initial sigma_V (velocity magnitude scale in Å per unit fluence for RELION prior) (default: 0.194826)
-  init_sigma_V: 0.2901410729361167
-  
-  # Output paths for sigma optimization results (optional)
-  # Final optimized sigma values as JSON
-  optimized_sigmas_output_path: ../../example/output/optimized_sigmas_bayesian_10x10.json
-  
-  # Full sigma history (values at each iteration) as JSON
-  sigma_history_output_path: ../../example/output/sigma_history_bayesian_10x10.json
-  
-  # Training loss history as JSON
-  training_history_output_path: ../../example/output/training_history_bayesian_10x10.json
-  
-  # Validation loss history as JSON
-  validation_history_output_path: ../../example/output/validation_history_bayesian_10x10.json
+  # Sigma optimization configuration (optional)
+  # If provided, sigma hyperparameters will be optimized using a validation template
+  # If omitted (set to null), optimization will be disabled
+  optimization_config:
+    # Sigma optimization algorithm: "nelder-mead" or "bayesian" (default: "bayesian")
+    optimize_algorithm: "bayesian"
+    
+    # Path to validation template (.mrc) - required for sigma optimization
+    # Should be different from training template to prevent overfitting
+    validation_template_path: ../../example/maps/60S_map_px0.936_bscale0.5_intro_DW_inside_75A.mrc
+    
+    # Number of outer loop iterations for sigma optimization (default: 50)
+    sigma_iterations: 100
+    
+    # Number of inner loop motion iterations per sigma update (default: 20)
+    motion_iterations: 20
+    
+    # Output paths for sigma optimization results (optional)
+    # Final optimized sigma values as JSON
+    optimized_sigmas_output_path: ../../example/output/optimized_sigmas_bayesian_20x20_sigmaA-exponential.json
+    
+    # Full sigma history (values at each iteration) as JSON
+    sigma_history_output_path: ../../example/output/sigma_history_bayesian_20x20_sigmaA-exponential.json
+    
+    # Training loss history as JSON
+    training_history_output_path: ../../example/output/training_history_bayesian_20x20_sigmaA-exponential.json
+    
+    # Validation loss history as JSON
+    validation_history_output_path: ../../example/output/validation_history_bayesian_20x20_sigmaA-exponential.json
 

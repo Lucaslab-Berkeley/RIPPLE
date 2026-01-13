@@ -9,8 +9,6 @@ import einops
 import pandas as pd
 import torch
 import tqdm
-import yaml
-from leopard_em.pydantic_models.managers import RefineTemplateManager
 from torch_cubic_spline_grids import CubicBSplineGrid3d, CubicCatmullRomGrid3d
 from torch_motion_correction import correct_motion, correct_motion_two_grids
 from torch_motion_correction.data_io import write_deformation_field_to_csv
@@ -21,6 +19,12 @@ from torch_motion_correction.optimization_state import OptimizationTracker
 
 from ripple.utils.data_io import load_template_volume_from_config
 
+from .core_utils import (
+    _create_batch_configs,
+    _filter_particles_by_quality,
+    _make_differentiable_refine_manager,
+    get_batch_mean_std_stacks,
+)
 from .generate_image import dose_weight_memory_efficient
 from .motion_priors import (
     _build_physical_coords,
@@ -67,6 +71,15 @@ def core_polish_particles(
     particle_batch_size: int = 102,
     save_intermediate_fields: bool = False,
     intermediate_fields_dir: str = ".",
+    prior_type: str = "relion",
+    sigma_D: float = 5782.376953,
+    sigma_V: float = 0.194826,
+    sigma_A: float = 0.513517,
+    alpha_spatial: float = 1e5,
+    sigma_A_exponential: bool = False,
+    sigma_A_amplitude: float = 2.0,
+    sigma_A_decay: float = 0.1,
+    sigma_A_offset: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, OptimizationTracker | None]:
     """
     Core function for polishing particles.
@@ -138,6 +151,29 @@ def core_polish_particles(
         Whether to save the intermediate fields.
     intermediate_fields_dir: str
         Directory to save the intermediate fields.
+    prior_type: str
+        Type of prior to use. Default is 'relion'.
+    sigma_D: float
+        Spatial correlation length in Angstroms for RELION prior.
+        Default is 5782.376953.
+    sigma_V: float
+        Velocity magnitude scale in Å per unit fluence for RELION prior.
+        Default is 0.194826.
+    sigma_A: float
+        Temporal smoothness parameter. Default is 0.513517.
+    alpha_spatial: float
+        Spatial smoothness strength for Laplacian prior. Default is 1e5.
+    sigma_A_exponential: bool
+        Whether to use exponential decay for sigma_A over frames. Default is False.
+    sigma_A_amplitude: float
+        Amplitude A in exponential sigma_A formula: A*exp(-B*fluence) + C.
+        Default is 2.0.
+    sigma_A_decay: float
+        Decay rate B in exponential sigma_A formula: A*exp(-B*fluence) + C.
+        Default is 0.1.
+    sigma_A_offset: float
+        Constant offset C in exponential sigma_A formula: A*exp(-B*fluence) + C.
+        Default is 1.0.
 
     Returns
     -------
@@ -180,6 +216,18 @@ def core_polish_particles(
         "save_intermediate_fields": save_intermediate_fields,
         "intermediate_fields_dir": intermediate_fields_dir,
     }
+    # Prior parameters only for bayesian estimation
+    prior_kwargs = {
+        "prior_type": prior_type,
+        "sigma_D": sigma_D,
+        "sigma_V": sigma_V,
+        "sigma_A": sigma_A,
+        "alpha_spatial": alpha_spatial,
+        "sigma_A_exponential": sigma_A_exponential,
+        "sigma_A_amplitude": sigma_A_amplitude,
+        "sigma_A_decay": sigma_A_decay,
+        "sigma_A_offset": sigma_A_offset,
+    }
 
     # estimate the motion
     if loss_trajectories:
@@ -189,12 +237,14 @@ def core_polish_particles(
                 trajectory,
             ) = estimate_local_motion_2dtm_particles_bayesian(
                 **estimate_kwargs,
+                **prior_kwargs,
                 particle_batch_size=particle_batch_size,
                 pixel_spacing=pixel_size
             )
         else:
-            updated_deformation_field, trajectory = estimate_local_motion_2dtm(
+            updated_deformation_field, trajectory = estimate_local_motion_2dtm_bayesian(
                 **estimate_kwargs,
+                **prior_kwargs,
                 pixel_spacing=pixel_size,
                 grid_type=grid_type,
                 voltage=voltage,
@@ -203,12 +253,14 @@ def core_polish_particles(
         if movie_extract:
             updated_deformation_field = estimate_local_motion_2dtm_particles_bayesian(
                 **estimate_kwargs,
+                **prior_kwargs,
                 particle_batch_size=particle_batch_size,
                 pixel_spacing=pixel_size,
             )
         else:
-            updated_deformation_field = estimate_local_motion_2dtm(
+            updated_deformation_field = estimate_local_motion_2dtm_bayesian(
                 **estimate_kwargs,
+                **prior_kwargs,
                 pixel_spacing=pixel_size,
                 grid_type=grid_type,
                 voltage=voltage,
@@ -229,107 +281,8 @@ def core_polish_particles(
     return corrected_movie, updated_deformation_field, movie_prepared, trajectory
 
 
-# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
-def _filter_particles_by_quality(
-    refine_config_path: str,
-    particle_indices: list[pd.Index] | None,
-    loss_metric: str = "scaled_mip",
-    min_snr: float = 0.0,
-    best_n: int = 10000000000,
-    temp_dir: Path | None = None,
-) -> tuple[str, list[pd.Index]]:
-    """
-    Filter particles based on quality metrics and create a temporary config/CSV.
-
-    Parameters
-    ----------
-    refine_config_path : str
-        Path to the refine config YAML file.
-    particle_indices : list[pd.Index] | None
-        Original particle indices to filter, or None to load all from CSV.
-    loss_metric : str
-        Metric column name to use for filtering ('mip' or 'scaled_mip').
-    min_snr : float
-        Minimum value of the loss_metric for a particle to be considered.
-    best_n : int
-        Maximum number of particles to use, selecting the top N by loss_metric.
-    temp_dir : Path | None
-        Temporary directory to use. If None, returns original config and indices.
-
-    Returns
-    -------
-    tuple[str, list[pd.Index]]
-        - Path to filtered config YAML (or original if no filtering needed)
-        - Filtered particle indices as list[pd.Index] with shape (1, n_filtered)
-    """
-    # Load the YAML config to get the CSV path
-    with open(refine_config_path, encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-
-    csv_path = config["particle_stack"]["df_path"]
-
-    # Resolve relative paths
-    config_dir = Path(refine_config_path).parent
-    if not Path(csv_path).is_absolute():
-        csv_path = str(config_dir / csv_path)
-
-    # Load the particle dataframe
-    df = pd.read_csv(csv_path, index_col=0)
-
-    # If particle_indices provided, filter df to only those indices
-    if particle_indices is not None and len(particle_indices) > 0:
-        df = df.loc[particle_indices[0]]
-
-    # Filter by minimum SNR if the metric column exists
-    needs_filtering = False
-    if loss_metric in df.columns:
-        df_filtered = df[df[loss_metric] >= min_snr]
-
-        # Select top best_n particles by loss_metric (highest values)
-        if len(df_filtered) > best_n:
-            df_filtered = df_filtered.nlargest(best_n, loss_metric)
-
-        needs_filtering = len(df_filtered) < len(df)
-
-        print(
-            f"Filtered particles: {len(df)} -> {len(df_filtered)} "
-            f"(min_{loss_metric}={min_snr}, best_n={best_n})"
-        )
-    else:
-        print(f"Warning: '{loss_metric}' column not found in CSV. Using all particles.")
-        df_filtered = df
-
-    # If no filtering needed or no temp_dir provided, return original config
-    if not needs_filtering or temp_dir is None:
-        return refine_config_path, [df_filtered.index]
-
-    # Create temporary filtered CSV
-    filtered_csv_path = temp_dir / "filtered_particles.csv"
-    df_filtered.to_csv(filtered_csv_path)
-
-    # Create new config pointing to filtered CSV with absolute paths
-    filtered_config = config.copy()
-    filtered_config["particle_stack"] = config["particle_stack"].copy()
-    filtered_config["particle_stack"]["df_path"] = str(filtered_csv_path)
-
-    # Resolve template_volume_path to absolute
-    if "template_volume_path" in filtered_config:
-        template_path = Path(config["template_volume_path"])
-        if not template_path.is_absolute():
-            template_path = (config_dir / template_path).resolve()
-        filtered_config["template_volume_path"] = str(template_path)
-
-    filtered_config_path = temp_dir / "filtered_config.yaml"
-    with open(filtered_config_path, "w", encoding="utf-8") as f:
-        yaml.dump(filtered_config, f)
-
-    # Return indices starting from 0 to match the new CSV
-    filtered_indices = pd.Index(range(len(df_filtered)))
-    return str(filtered_config_path), [filtered_indices]
-
-
 # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
-def estimate_local_motion_2dtm(
+def estimate_local_motion_2dtm_bayesian(
     image: torch.Tensor,  # (t, H, W)
     var_image: torch.Tensor,
     mean_image: torch.Tensor,
@@ -353,6 +306,15 @@ def estimate_local_motion_2dtm(
     best_n: int = 10000000000,
     save_intermediate_fields: bool = False,
     intermediate_fields_dir: str = ".",
+    prior_type: str = "relion",
+    sigma_D: float = 5782.376953,
+    sigma_V: float = 0.194826,
+    sigma_A: float = 0.513517,
+    alpha_spatial: float = 1e5,
+    sigma_A_exponential: bool = False,
+    sigma_A_amplitude: float = 2.0,
+    sigma_A_decay: float = 0.1,
+    sigma_A_offset: float = 1.0,
 ) -> torch.Tensor | tuple[torch.Tensor, OptimizationTracker]:
     """Estimate motion (new method).
 
@@ -410,6 +372,24 @@ def estimate_local_motion_2dtm(
         Whether to save the intermediate fields.
     intermediate_fields_dir: str
         Directory to save the intermediate fields.
+    prior_type: str
+        Type of motion prior: "relion" or "laplacian". Default is "relion".
+    sigma_D: float
+        Spatial correlation length in Angstroms (RELION only). Default is 5000.0.
+    sigma_V: float
+        Velocity magnitude scale in Å per unit fluence (RELION only). Default is 1.0.
+    sigma_A_exponential: bool
+        Use exponential decay for sigma_A over frames. Default is False.
+    sigma_A_amplitude: float
+        Amplitude A in sigma_A[f] = A * exp(B * f). Default is 2.0.
+    sigma_A_decay: float
+        Decay rate B in sigma_A = A*exp(-B*fluence) + C. Default is 0.1 (1/(e-/Å²)).
+    sigma_A_offset: float
+        Constant offset C in sigma_A = A*exp(-B*fluence) + C. Default is 1.0.
+    sigma_A: float
+        Temporal smoothness in Å/(e-/Å²). Smaller = smoother. Default is 1.0.
+    alpha_spatial: float
+        Spatial smoothness strength (Laplacian only). Larger = smoother. Default is 1.0.
 
     Returns
     -------
@@ -420,33 +400,36 @@ def estimate_local_motion_2dtm(
     """
     torch.set_grad_enabled(True)
 
-    # Filter particles by quality metrics (no temp CSV needed for non-particles version)
-    refine_config_path, particle_indices = _filter_particles_by_quality(
+    # Setup common parameters for motion estimation
+    setup_result = _setup_estimate_motion(
         refine_config_path=refine_config_path,
         particle_indices=particle_indices,
         loss_metric=loss_metric,
         min_snr=min_snr,
         best_n=best_n,
         temp_dir=None,
+        var_image=var_image,
+        mean_image=mean_image,
+        image=image,
+        optimizer_kwargs=optimizer_kwargs,
+        return_trajectory=return_trajectory,
+        trajectory_kwargs=trajectory_kwargs,
+        initial_deformation_field=initial_deformation_field,
+        deformation_field_resolution=deformation_field_resolution,
+        device=device,
+        requires_grad=False,
+        grid_type=grid_type,
     )
-
-    # Make sure var and mean image don't have gradients
-    template_volume = load_template_volume_from_config(refine_config_path)
-    if var_image.requires_grad:
-        var_image = var_image.clone().detach().requires_grad_(False)
-    if mean_image.requires_grad:
-        mean_image = mean_image.clone().detach().requires_grad_(False)
-    if optimizer_kwargs is None:
-        optimizer_kwargs = {"lr": 0.2}
-    trajectory = None
-    if return_trajectory:
-        trajectory_kwargs = trajectory_kwargs if trajectory_kwargs is not None else {}
-        trajectory = OptimizationTracker(**trajectory_kwargs)
-
-    # Ensure image requires gradients for optimization
-    # Ensure image does NOT require gradients - only deformation field should
-    if image.requires_grad:
-        image = image.clone().detach().requires_grad_(False)
+    refine_config_path = setup_result["refine_config_path"]
+    particle_indices = setup_result["particle_indices"]
+    template_volume = setup_result["template_volume"]
+    var_image = setup_result["var_image"]
+    mean_image = setup_result["mean_image"]
+    image = setup_result["image"]
+    optimizer_kwargs = setup_result["optimizer_kwargs"]
+    trajectory = setup_result["trajectory"]
+    deformation_field = setup_result["deformation_field"]
+    deformation_field_data = setup_result["deformation_field_data"]
 
     print("Making new deformation field")
     new_deformation_field = CubicCatmullRomGrid3d(
@@ -454,38 +437,26 @@ def estimate_local_motion_2dtm(
     ).to(device)
     print("New deformation field made")
 
-    if initial_deformation_field is None:
-        deformation_field_data = torch.zeros(
-            size=(2, *deformation_field_resolution),
-            device=device,
-        )
-    else:
-        # Get the resampled deformation field
-        deformation_field_data = resample_deformation_field(
-            deformation_field=initial_deformation_field,
-            target_resolution=(
-                deformation_field_resolution[0],
-                deformation_field_resolution[1],
-                deformation_field_resolution[2],
-            ),
-        )
-        deformation_field_data = deformation_field_data - (
-            torch.mean(deformation_field_data, dim=(1, 2, 3), keepdim=True)
-        )
-
-    print("Making deformation field")
-    if grid_type == "catmull_rom":
-        deformation_field = CubicCatmullRomGrid3d.from_grid_data(
-            deformation_field_data
-        ).to(device)
-    elif grid_type == "bspline":
-        deformation_field = CubicBSplineGrid3d.from_grid_data(
-            deformation_field_data
-        ).to(device)
-    else:
-        raise ValueError(
-            f"Unknown grid_type: {grid_type}. Must be 'catmull_rom' or 'bspline'"
-        )
+        # Setup prior-specific parameters
+    prior_params = _setup_priors(
+        prior_type=prior_type,
+        sigma_A_exponential=sigma_A_exponential,
+        sigma_A=sigma_A,
+        sigma_A_amplitude=sigma_A_amplitude,
+        sigma_A_decay=sigma_A_decay,
+        sigma_A_offset=sigma_A_offset,
+        sigma_V=sigma_V,
+        image=image,
+        fluence_per_frame=fluence_per_frame,
+        deformation_field_resolution=deformation_field_resolution,
+        pixel_spacing=pixel_spacing,
+        device=device,
+    )
+    image_coords = prior_params.get("image_coords")
+    sigma_V_norm = prior_params.get("sigma_V_norm")
+    sigma_A_norm = prior_params["sigma_A_norm"]
+    spatial_spacing = prior_params.get("spatial_spacing")
+    temporal_spacing = prior_params.get("temporal_spacing")
 
     motion_optimizer = torch.optim.Adam(
         params=new_deformation_field.parameters(),
@@ -565,8 +536,21 @@ def estimate_local_motion_2dtm(
                 f"Unknown loss_metric: {loss_metric}. Must be 'mip' or 'scaled_mip'"
             )
 
-        loss = -torch.mean(loss_tensor)
-        print(f"loss: {loss}")
+        # Compute loss with motion priors
+        loss = _compute_loss(
+            loss_tensor=loss_tensor,
+            prior_type=prior_type,
+            deformation_field=deformation_field,
+            batch_size=1,
+            total_n_particles=1,
+            image_coords=image_coords,
+            sigma_D=sigma_D,
+            sigma_V_norm=sigma_V_norm,
+            sigma_A_norm=sigma_A_norm,
+            alpha_spatial=alpha_spatial,
+            spatial_spacing=spatial_spacing,
+            temporal_spacing=temporal_spacing,
+        )
 
         motion_optimizer.zero_grad()
 
@@ -599,117 +583,6 @@ def estimate_local_motion_2dtm(
     return final_deformation_field
 
 
-# pylint: disable=too-many-locals
-def _create_batch_configs(
-    refine_config_path: str,
-    particle_batch_size: int,
-    temp_dir: Path,
-) -> tuple[list[str], list[list[pd.Index]]]:
-    """
-    Split the particle CSV into batches and create temporary config files.
-
-    Parameters
-    ----------
-    refine_config_path : str
-        Path to the original refine config YAML file.
-    particle_batch_size : int
-        Number of particles per batch.
-    temp_dir : Path
-        Temporary directory to store batch configs and CSVs.
-
-    Returns
-    -------
-    tuple[list[str], list[list[pd.Index]]]
-        - List of paths to batch config YAML files
-        - List of batch particle indices.
-        Each as list[pd.Index] with shape (1, n_particles_in_batch)
-    """
-    # Load the original config
-    with open(refine_config_path, encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-
-    # Get base directory of original config for resolving relative paths
-    config_base_dir = Path(refine_config_path).parent.resolve()
-
-    def resolve_path(path_str: str | None) -> str | None:
-        """Resolve a path relative to the original config directory."""
-        if path_str is None:
-            return None
-        path = Path(path_str)
-        if not path.is_absolute():
-            path = (config_base_dir / path).resolve()
-        return str(path)
-
-    # Get the CSV path from config and resolve it
-    original_csv_path = resolve_path(config["particle_stack"]["df_path"])
-
-    # Load the full particle dataframe
-    df = pd.read_csv(original_csv_path, index_col=0)
-    n_particles = len(df)
-    n_batches = (n_particles + particle_batch_size - 1) // particle_batch_size
-
-    batch_config_paths = []
-    batch_particle_indices = []
-
-    for batch_idx in range(n_batches):
-        start_idx = batch_idx * particle_batch_size
-        end_idx = min((batch_idx + 1) * particle_batch_size, n_particles)
-
-        # Create batch dataframe
-        batch_df = df.iloc[start_idx:end_idx]
-
-        # Save batch CSV (this will have row indices 0 to len(batch_df)-1)
-        batch_csv_path = temp_dir / f"batch_{batch_idx}_particles.csv"
-        batch_df.to_csv(batch_csv_path)
-
-        # Create batch particle indices
-        # Each batch has indices from 0 to n_particles_in_batch
-        batch_size = end_idx - start_idx
-        batch_indices = pd.Index(range(batch_size))
-        batch_particle_indices.append([batch_indices])
-
-        # Create batch config with absolute paths
-        batch_config = config.copy()
-        batch_config["particle_stack"] = config["particle_stack"].copy()
-        batch_config["particle_stack"]["df_path"] = str(batch_csv_path)
-
-        # Resolve template_volume_path to absolute
-        if "template_volume_path" in batch_config:
-            batch_config["template_volume_path"] = resolve_path(
-                config["template_volume_path"]
-            )
-
-        # Save batch config
-        batch_config_path = temp_dir / f"batch_{batch_idx}_config.yaml"
-        with open(batch_config_path, "w", encoding="utf-8") as f:
-            yaml.dump(batch_config, f)
-
-        batch_config_paths.append(str(batch_config_path))
-
-    return batch_config_paths, batch_particle_indices
-
-
-def _make_differentiable_refine_manager(
-    refine_config_path: str,
-) -> RefineTemplateManager:
-    """
-    Make a differentiable refine manager from a particle results path.
-
-    Parameters
-    ----------
-    refine_config_path: str
-        Path to the refine config file.
-
-    Returns
-    -------
-    DifferentiableRefineManager
-        The differentiable refine manager.
-    """
-    refine_manager = RefineTemplateManager.from_yaml(refine_config_path)
-    # override the movie_params here
-    refine_manager.movie_config.enabled = False
-    return refine_manager
-
 # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
 def estimate_local_motion_2dtm_particles_bayesian(
     image: torch.Tensor,  # (t, H, W)
@@ -734,12 +607,12 @@ def estimate_local_motion_2dtm_particles_bayesian(
     best_n: int = 10000000000,
     save_intermediate_fields: bool = False,
     intermediate_fields_dir: str = ".",
-    prior_type: str = "laplacian",
-    sigma_D: float = 5000.0,
-    sigma_V: float = 1.0,
-    sigma_A: float = 1.0,
+    prior_type: str = "relion",
+    sigma_D: float = 5782.376953,
+    sigma_V: float = 0.194826,
+    sigma_A: float = 0.513517,
     alpha_spatial: float = 1e5,
-    sigma_A_exponential: bool = True,
+    sigma_A_exponential: bool = False,
     sigma_A_amplitude: float = 2.0,
     sigma_A_decay: float = 0.1,
     sigma_A_offset: float = 1.0,
@@ -830,64 +703,34 @@ def estimate_local_motion_2dtm_particles_bayesian(
     # Create temporary directory for filtering and batch configs
     temp_dir = Path(tempfile.mkdtemp(prefix="ripple_batch_"))
 
-    # Filter particles by quality metrics BEFORE batching
-    # This creates a filtered CSV that batching will then split
-    refine_config_path, particle_indices = _filter_particles_by_quality(
+    # Setup common parameters for motion estimation
+    setup_result = _setup_estimate_motion(
         refine_config_path=refine_config_path,
         particle_indices=particle_indices,
         loss_metric=loss_metric,
         min_snr=min_snr,
         best_n=best_n,
         temp_dir=temp_dir,
+        var_image=var_image,
+        mean_image=mean_image,
+        image=image,
+        optimizer_kwargs=optimizer_kwargs,
+        return_trajectory=return_trajectory,
+        trajectory_kwargs=trajectory_kwargs,
+        initial_deformation_field=initial_deformation_field,
+        deformation_field_resolution=deformation_field_resolution,
+        device=device,
+        requires_grad=True,
     )
-
-    template_volume = load_template_volume_from_config(refine_config_path)
-    # Make sure var and mean image don't have gradients
-    if var_image.requires_grad:
-        var_image = var_image.clone().detach().requires_grad_(False)
-    if mean_image.requires_grad:
-        mean_image = mean_image.clone().detach().requires_grad_(False)
-    if optimizer_kwargs is None:
-        optimizer_kwargs = {"lr": 0.2}
-    trajectory = None
-    if return_trajectory:
-        trajectory_kwargs = trajectory_kwargs if trajectory_kwargs is not None else {}
-        trajectory = OptimizationTracker(**trajectory_kwargs)
-
-    # Ensure image requires gradients for optimization
-    # Ensure image does NOT require gradients - only deformation field should
-    if image.requires_grad:
-        image = image.clone().detach().requires_grad_(False)
-
-    if initial_deformation_field is None:
-        deformation_field_data = torch.zeros(
-            size=(2, *deformation_field_resolution),
-            device=device,
-            requires_grad=True,
-        )
-    else:
-        # Get the resampled deformation field
-        deformation_field_data = resample_deformation_field(
-            deformation_field=initial_deformation_field,
-            target_resolution=(
-                deformation_field_resolution[0],
-                deformation_field_resolution[1],
-                deformation_field_resolution[2],
-            ),
-        )
-        deformation_field_data = deformation_field_data - torch.mean(
-            deformation_field_data, dim=(1, 2, 3), keepdim=True
-        )
-
-        # Ensure gradients are enabled for optimization
-        deformation_field_data = (
-            deformation_field_data.clone().detach().requires_grad_(True)
-        )
-
-    # make the catmull rom grid
-    deformation_field = CubicCatmullRomGrid3d.from_grid_data(deformation_field_data).to(
-        device
-    )
+    refine_config_path = setup_result["refine_config_path"]
+    particle_indices = setup_result["particle_indices"]
+    template_volume = setup_result["template_volume"]
+    var_image = setup_result["var_image"]
+    mean_image = setup_result["mean_image"]
+    image = setup_result["image"]
+    optimizer_kwargs = setup_result["optimizer_kwargs"]
+    trajectory = setup_result["trajectory"]
+    deformation_field = setup_result["deformation_field"]
 
     motion_optimizer = torch.optim.Adam(
         params=deformation_field.parameters(),
@@ -910,102 +753,35 @@ def estimate_local_motion_2dtm_particles_bayesian(
     )
 
     # Setup prior-specific parameters
-    # Create fluence-dependent sigma_A if requested
-    if sigma_A_exponential:
-        total_fluence = fluence_per_frame * image.shape[0]
-        sigma_A_tensor = _create_exponential_sigma_A(
-            total_fluence=total_fluence,
-            n_frames=deformation_field_resolution[0],
-            A=sigma_A_amplitude,
-            B=sigma_A_decay,
-            C=sigma_A_offset,
-            device=device,
-        )
-    else:
-        sigma_A_tensor = sigma_A
-
-    if prior_type == "relion":
-        image_coords = _build_physical_coords(
-            nh=deformation_field_resolution[1],
-            nw=deformation_field_resolution[2],
-            image_shape=image.shape[-2:],
-            pixel_size=pixel_spacing,
-            device=device,
-        )
-        # Normalize sigma parameters by fluence
-        sigma_V_norm = _normalize_sigma_fluence(
-            sigma_V,
-            fluence_per_frame * image.shape[0],
-            deformation_field_resolution[0],
-        )
-        if not sigma_A_exponential:
-            sigma_A_norm = _normalize_sigma_fluence(
-                sigma_A,
-                fluence_per_frame * image.shape[0],
-                deformation_field_resolution[0],
-            )
-        else:
-            # Normalize the exponential tensor
-            sigma_A_norm = _normalize_sigma_fluence(
-                sigma_A_tensor,
-                fluence_per_frame * image.shape[0],
-                deformation_field_resolution[0],
-            )
-    elif prior_type == "laplacian":
-        # Compute physical spacing for Laplacian prior
-        spatial_spacing, temporal_spacing = _compute_physical_spacing(
-            image_shape=image.shape[-2:],
-            pixel_size=pixel_spacing,
-            grid_resolution=deformation_field_resolution,
-            total_fluence=fluence_per_frame * image.shape[0],
-        )
-        # For Laplacian, use sigma_A_tensor directly (no normalization needed)
-        sigma_A_norm = sigma_A_tensor
-    else:
-        raise ValueError(
-            f"Unknown prior_type: {prior_type}. Must be 'relion' or 'laplacian'"
-        )
+    prior_params = _setup_priors(
+        prior_type=prior_type,
+        sigma_A_exponential=sigma_A_exponential,
+        sigma_A=sigma_A,
+        sigma_A_amplitude=sigma_A_amplitude,
+        sigma_A_decay=sigma_A_decay,
+        sigma_A_offset=sigma_A_offset,
+        sigma_V=sigma_V,
+        image=image,
+        fluence_per_frame=fluence_per_frame,
+        deformation_field_resolution=deformation_field_resolution,
+        pixel_spacing=pixel_spacing,
+        device=device,
+    )
+    image_coords = prior_params.get("image_coords")
+    sigma_V_norm = prior_params.get("sigma_V_norm")
+    sigma_A_norm = prior_params["sigma_A_norm"]
+    spatial_spacing = prior_params.get("spatial_spacing")
+    temporal_spacing = prior_params.get("temporal_spacing")
 
     # Calculate total number of particles across all batches
     total_n_particles = sum(len(indices[0]) for indices in batch_particle_indices)
     # Pre-compute mean/std stacks for all batches (they don't change across iterations)
-    batch_mean_stacks = {}
-    batch_std_stacks = {}
-    for batch_config_path, batch_indices in zip(
-        batch_config_paths, batch_particle_indices, strict=True
-    ):
-        batch_refine_manager = _make_differentiable_refine_manager(
-            refine_config_path=batch_config_path,
-        )
-        batch_particle_stack = batch_refine_manager.particle_stack
-
-        h, w = batch_particle_stack.original_template_size
-        box_h, box_w = batch_particle_stack.extracted_box_size
-        extracted_box_size = (box_h - h + 1, box_w - w + 1)
-
-        batch_mean_stacks[batch_config_path] = (
-            batch_particle_stack.construct_image_stack(
-                images=mean_image,
-                indices=batch_indices,
-                extraction_size=extracted_box_size,
-                pos_reference="top-left",
-                handle_bounds="pad",
-                padding_mode="constant",
-                padding_value=0.0,
-            )
-        )
-
-        batch_std_stacks[batch_config_path] = (
-            batch_particle_stack.construct_image_stack(
-                images=var_image,
-                indices=batch_indices,
-                extraction_size=extracted_box_size,
-                pos_reference="top-left",
-                handle_bounds="pad",
-                padding_mode="constant",
-                padding_value=1e10,
-            )
-        )
+    batch_mean_stacks, batch_std_stacks = get_batch_mean_std_stacks(
+        batch_config_paths=batch_config_paths,
+        batch_particle_indices=batch_particle_indices,
+        mean_image=mean_image,
+        var_image=var_image,
+    )
     # Use try-finally to ensure cleanup of temp directory
     try:
         for iter_idx in pbar:
@@ -1082,33 +858,21 @@ def estimate_local_motion_2dtm_particles_bayesian(
                         f"{loss_metric}. Must be 'mip' or 'scaled_mip'"
                     )
 
-                # Compute motion priors
-                if prior_type == "relion":
-                    E_space, E_time = relion2019_compute(
-                        field=deformation_field._data,
-                        coords=image_coords,
-                        sigma_D=sigma_D,
-                        sigma_V=sigma_V_norm,
-                        sigma_A=sigma_A_norm,
-                    )
-                elif prior_type == "laplacian":
-                    E_space, E_time = laplacian_compute(
-                        field=deformation_field._data,
-                        sigma_A=sigma_A_norm,
-                        alpha=alpha_spatial,
-                        spatial_spacing=spatial_spacing,
-                        temporal_spacing=temporal_spacing,
-                    )
-
-                E_space = E_space * batch_size / total_n_particles
-                E_time = E_time * batch_size / total_n_particles
-
-                # Compute loss for this batch (weighted by batch size for averaging)
-                E_obs = -2*torch.mean(loss_tensor) * batch_size / total_n_particles
-                batch_loss = E_obs + (E_space + E_time)
-                print(f"E_obs: {E_obs.item()}")
-                print(f"E_space: {E_space.item()}")
-                print(f"E_time: {E_time.item()}")
+                # Compute loss with motion priors
+                batch_loss = _compute_loss(
+                    loss_tensor=loss_tensor,
+                    prior_type=prior_type,
+                    deformation_field=deformation_field,
+                    batch_size=batch_size,
+                    total_n_particles=total_n_particles,
+                    image_coords=image_coords,
+                    sigma_D=sigma_D,
+                    sigma_V_norm=sigma_V_norm,
+                    sigma_A_norm=sigma_A_norm,
+                    alpha_spatial=alpha_spatial,
+                    spatial_spacing=spatial_spacing,
+                    temporal_spacing=temporal_spacing,
+                )
                 accumulated_loss += batch_loss.item()
                 print(f"batch_loss: {batch_loss.item()}")
                 # Backward pass - gradients accumulate across batches
@@ -1152,3 +916,371 @@ def estimate_local_motion_2dtm_particles_bayesian(
     if return_trajectory:
         return final_deformation_field, trajectory
     return final_deformation_field
+
+
+def _setup_estimate_motion(
+    refine_config_path: str,
+    particle_indices: pd.Index | None,
+    loss_metric: str,
+    min_snr: float,
+    best_n: int,
+    temp_dir: Path | None,
+    var_image: torch.Tensor,
+    mean_image: torch.Tensor,
+    image: torch.Tensor,
+    optimizer_kwargs: dict[str, Any] | None,
+    return_trajectory: bool,
+    trajectory_kwargs: dict | None,
+    initial_deformation_field: torch.Tensor | None,
+    deformation_field_resolution: tuple[int, int, int],
+    device: torch.device | None,
+    requires_grad: bool = False,
+    grid_type: Literal["catmull_rom", "bspline"] | None = None,
+) -> dict[str, Any]:
+    """Setup common parameters for motion estimation.
+
+    Parameters
+    ----------
+    refine_config_path: str
+        Path to the refine config file.
+    particle_indices: pd.Index | None
+        Particle indices to use for the refinement.
+    loss_metric: str
+        Loss metric to use for the refinement.
+    min_snr: float
+        Minimum SNR to use for the refinement.
+    best_n: int
+        Maximum number of particles to use for the refinement.
+    temp_dir: Path | None
+        Temporary directory for filtering. None for non-particles version.
+    var_image: torch.Tensor
+        (t, H, W) variance image.
+    mean_image: torch.Tensor
+        (t, H, W) mean image.
+    image: torch.Tensor
+        (t, H, W) image tensor.
+    optimizer_kwargs: dict[str, Any] | None
+        Keyword arguments for the optimizer.
+    return_trajectory: bool
+        Whether to return the optimization trajectory.
+    trajectory_kwargs: dict | None
+        Additional keyword arguments for the trajectory tracking.
+    initial_deformation_field: torch.Tensor | None
+        Initial deformation field to start from.
+    deformation_field_resolution: tuple[int, int, int]
+        Resolution of the deformation field (nt, nh, nw).
+    device: torch.device | None
+        Device to perform computation on.
+    requires_grad: bool
+        Whether to require gradients on deformation_field_data. Default is False.
+    grid_type: Literal["catmull_rom", "bspline"] | None
+        Grid type to use. If None, uses catmull_rom. Default is None.
+
+    Returns
+    -------
+    dict[str, Any]
+        Dictionary containing:
+        - refine_config_path: Updated refine config path
+        - particle_indices: Updated particle indices
+        - template_volume: Loaded template volume
+        - var_image: Detached variance image
+        - mean_image: Detached mean image
+        - image: Detached image
+        - optimizer_kwargs: Optimizer kwargs with defaults
+        - trajectory: OptimizationTracker or None
+        - deformation_field_data: Initialized/resampled deformation field data
+        - deformation_field: Created deformation field grid (if grid_type provided)
+    """
+    # Filter particles by quality metrics
+    refine_config_path, particle_indices = _filter_particles_by_quality(
+        refine_config_path=refine_config_path,
+        particle_indices=particle_indices,
+        loss_metric=loss_metric,
+        min_snr=min_snr,
+        best_n=best_n,
+        temp_dir=temp_dir,
+    )
+
+    template_volume = load_template_volume_from_config(refine_config_path)
+    # Make sure var and mean image don't have gradients
+    if var_image.requires_grad:
+        var_image = var_image.clone().detach().requires_grad_(False)
+    if mean_image.requires_grad:
+        mean_image = mean_image.clone().detach().requires_grad_(False)
+    if optimizer_kwargs is None:
+        optimizer_kwargs = {"lr": 0.2}
+    trajectory = None
+    if return_trajectory:
+        trajectory_kwargs = trajectory_kwargs if trajectory_kwargs is not None else {}
+        trajectory = OptimizationTracker(**trajectory_kwargs)
+
+    # Ensure image does NOT require gradients - only deformation field should
+    if image.requires_grad:
+        image = image.clone().detach().requires_grad_(False)
+
+    if initial_deformation_field is None:
+        deformation_field_data = torch.zeros(
+            size=(2, *deformation_field_resolution),
+            device=device,
+            requires_grad=requires_grad,
+        )
+    else:
+        # Get the resampled deformation field
+        deformation_field_data = resample_deformation_field(
+            deformation_field=initial_deformation_field,
+            target_resolution=(
+                deformation_field_resolution[0],
+                deformation_field_resolution[1],
+                deformation_field_resolution[2],
+            ),
+        )
+        deformation_field_data = deformation_field_data - torch.mean(
+            deformation_field_data, dim=(1, 2, 3), keepdim=True
+        )
+
+        # Ensure gradients are enabled for optimization if requested
+        if requires_grad:
+            deformation_field_data = (
+                deformation_field_data.clone().detach().requires_grad_(True)
+            )
+
+    result = {
+        "refine_config_path": refine_config_path,
+        "particle_indices": particle_indices,
+        "template_volume": template_volume,
+        "var_image": var_image,
+        "mean_image": mean_image,
+        "image": image,
+        "optimizer_kwargs": optimizer_kwargs,
+        "trajectory": trajectory,
+        "deformation_field_data": deformation_field_data,
+    }
+
+    # Create deformation field if grid_type is provided
+    if grid_type is not None:
+        if grid_type == "catmull_rom":
+            deformation_field = CubicCatmullRomGrid3d.from_grid_data(
+                deformation_field_data
+            ).to(device)
+        elif grid_type == "bspline":
+            deformation_field = CubicBSplineGrid3d.from_grid_data(
+                deformation_field_data
+            ).to(device)
+        else:
+            raise ValueError(
+                f"Unknown grid_type: {grid_type}. Must be 'catmull_rom' or 'bspline'"
+            )
+        result["deformation_field"] = deformation_field
+    else:
+        # Default to catmull_rom if not specified
+        deformation_field = CubicCatmullRomGrid3d.from_grid_data(
+            deformation_field_data
+        ).to(device)
+        result["deformation_field"] = deformation_field
+
+    return result
+
+
+def _compute_loss(
+    loss_tensor: torch.Tensor,
+    prior_type: str,
+    deformation_field: CubicCatmullRomGrid3d,
+    batch_size: int,
+    total_n_particles: int,
+    image_coords: torch.Tensor | None = None,
+    sigma_D: float | None = None,
+    sigma_V_norm: float | None = None,
+    sigma_A_norm: torch.Tensor | float | None = None,
+    alpha_spatial: float | None = None,
+    spatial_spacing: float | None = None,
+    temporal_spacing: float | None = None,
+) -> torch.Tensor:
+    """Compute loss with motion priors.
+
+    Parameters
+    ----------
+    loss_tensor: torch.Tensor
+        Loss tensor from refinement.
+    prior_type: str
+        Type of motion prior: "relion" or "laplacian".
+    deformation_field: CubicCatmullRomGrid3d
+        Deformation field grid.
+    batch_size: int
+        Size of current batch.
+    total_n_particles: int
+        Total number of particles across all batches.
+    image_coords: torch.Tensor | None
+        Physical coordinates for RELION prior. Required if prior_type is "relion".
+    sigma_D: float | None
+        Spatial correlation length for RELION prior. Required if prior_type is "relion".
+    sigma_V_norm: float | None
+        Normalized velocity magnitude scale for RELION prior.
+        Required if prior_type is "relion".
+    sigma_A_norm: torch.Tensor | float | None
+        Normalized temporal smoothness parameter.
+        Required for both prior types.
+    alpha_spatial: float | None
+        Spatial smoothness strength for Laplacian prior.
+        Required if prior_type is "laplacian".
+    spatial_spacing: float | None
+        Spatial spacing for Laplacian prior. Required if prior_type is "laplacian".
+    temporal_spacing: float | None
+        Temporal spacing for Laplacian prior. Required if prior_type is "laplacian".
+
+    Returns
+    -------
+    torch.Tensor
+        Computed loss value.
+    """
+    # Compute motion priors
+    E_space = 0.0
+    E_time = 0.0
+    if prior_type == "relion":
+        E_space, E_time = relion2019_compute(
+            field=deformation_field._data,
+            coords=image_coords,
+            sigma_D=sigma_D,
+            sigma_V=sigma_V_norm,
+            sigma_A=sigma_A_norm,
+        )
+    elif prior_type == "laplacian":
+        E_space, E_time = laplacian_compute(
+            field=deformation_field._data,
+            sigma_A=sigma_A_norm,
+            alpha=alpha_spatial,
+            spatial_spacing=spatial_spacing,
+            temporal_spacing=temporal_spacing,
+        )
+
+    E_space = E_space * batch_size / total_n_particles
+    E_time = E_time * batch_size / total_n_particles
+
+    # Compute loss for this batch (weighted by batch size for averaging)
+    E_obs = -2 * torch.mean(loss_tensor) * batch_size / total_n_particles
+    loss = E_obs + (E_space + E_time)
+    print(f"E_obs: {E_obs.item()}")
+    print(f"E_space: {E_space.item()}")
+    print(f"E_time: {E_time.item()}")
+    print(f"loss: {loss.item()}")
+
+    return loss
+
+
+def _setup_priors(
+    prior_type: str,
+    sigma_A_exponential: bool,
+    sigma_A: float,
+    sigma_A_amplitude: float,
+    sigma_A_decay: float,
+    sigma_A_offset: float,
+    sigma_V: float,
+    image: torch.Tensor,
+    fluence_per_frame: float,
+    deformation_field_resolution: tuple[int, int, int],
+    pixel_spacing: float,
+    device: torch.device,
+) -> dict[str, Any]:
+    """Setup prior-specific parameters for motion estimation.
+
+    Parameters
+    ----------
+    prior_type: str
+        Type of motion prior: "relion" or "laplacian".
+    sigma_A_exponential: bool
+        Whether to use exponential decay for sigma_A over frames.
+    sigma_A: float
+        Temporal smoothness parameter.
+    sigma_A_amplitude: float
+        Amplitude A in exponential sigma_A formula: A*exp(-B*fluence) + C.
+    sigma_A_decay: float
+        Decay rate B in exponential sigma_A formula: A*exp(-B*fluence) + C.
+    sigma_A_offset: float
+        Constant offset C in exponential sigma_A formula: A*exp(-B*fluence) + C.
+    sigma_V: float
+        Velocity magnitude scale in Å per unit fluence for RELION prior.
+    image: torch.Tensor
+        (t, H, W) image tensor.
+    fluence_per_frame: float
+        Fluence per frame in electrons per pixel.
+    deformation_field_resolution: tuple[int, int, int]
+        Resolution of the deformation field (nt, nh, nw).
+    pixel_spacing: float
+        Pixel spacing in Angstroms.
+    device: torch.device
+        Device to perform computation on.
+
+    Returns
+    -------
+    dict[str, Any]
+        Dictionary containing prior parameters:
+        - sigma_A_norm: Normalized sigma_A (always present)
+        - image_coords: Physical coordinates (only for relion prior)
+        - sigma_V_norm: Normalized sigma_V (only for relion prior)
+        - spatial_spacing: Spatial spacing (only for laplacian prior)
+        - temporal_spacing: Temporal spacing (only for laplacian prior)
+    """
+    # Create fluence-dependent sigma_A if requested
+    if sigma_A_exponential:
+        total_fluence = fluence_per_frame * image.shape[0]
+        sigma_A_tensor = _create_exponential_sigma_A(
+            total_fluence=total_fluence,
+            n_frames=deformation_field_resolution[0],
+            A=sigma_A_amplitude,
+            B=sigma_A_decay,
+            C=sigma_A_offset,
+            device=device,
+        )
+    else:
+        sigma_A_tensor = sigma_A
+
+    if prior_type == "relion":
+        image_coords = _build_physical_coords(
+            nh=deformation_field_resolution[1],
+            nw=deformation_field_resolution[2],
+            image_shape=image.shape[-2:],
+            pixel_size=pixel_spacing,
+            device=device,
+        )
+        # Normalize sigma parameters by fluence
+        sigma_V_norm = _normalize_sigma_fluence(
+            sigma_V,
+            fluence_per_frame * image.shape[0],
+            deformation_field_resolution[0],
+        )
+        if not sigma_A_exponential:
+            sigma_A_norm = _normalize_sigma_fluence(
+                sigma_A,
+                fluence_per_frame * image.shape[0],
+                deformation_field_resolution[0],
+            )
+        else:
+            # Normalize the exponential tensor
+            sigma_A_norm = _normalize_sigma_fluence(
+                sigma_A_tensor,
+                fluence_per_frame * image.shape[0],
+                deformation_field_resolution[0],
+            )
+        return {
+            "sigma_A_norm": sigma_A_norm,
+            "image_coords": image_coords,
+            "sigma_V_norm": sigma_V_norm,
+        }
+    elif prior_type == "laplacian":
+        # Compute physical spacing for Laplacian prior
+        spatial_spacing, temporal_spacing = _compute_physical_spacing(
+            image_shape=image.shape[-2:],
+            pixel_size=pixel_spacing,
+            grid_resolution=deformation_field_resolution,
+            total_fluence=fluence_per_frame * image.shape[0],
+        )
+        # For Laplacian, use sigma_A_tensor directly (no normalization needed)
+        sigma_A_norm = sigma_A_tensor
+        return {
+            "sigma_A_norm": sigma_A_norm,
+            "spatial_spacing": spatial_spacing,
+            "temporal_spacing": temporal_spacing,
+        }
+    else:
+        raise ValueError(
+            f"Unknown prior_type: {prior_type}. Must be 'relion' or 'laplacian'"
+        )

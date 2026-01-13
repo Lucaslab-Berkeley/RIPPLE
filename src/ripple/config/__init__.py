@@ -3,7 +3,9 @@
 from .alignment_config import (
     AlignFramesConfig,
     BaseAlignmentConfig,
+    OptimizationConfig,
     PolishParticlesConfig,
+    PriorConfig,
 )
 from .computational_config import ComputationalConfig
 from .movie_config import MovieConfig
@@ -14,6 +16,8 @@ __all__ = [
     "BaseAlignmentConfig",
     "ComputationalConfig",
     "MovieConfig",
+    "OptimizationConfig",
     "OutputConfig",
     "PolishParticlesConfig",
+    "PriorConfig",
 ]

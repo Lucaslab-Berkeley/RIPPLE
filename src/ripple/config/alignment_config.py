@@ -115,6 +115,85 @@ class AlignFramesConfig(BaseAlignmentConfig):
         return v
 
 
+class PriorConfig(BaseModelRIPPLE):
+    """Configuration for motion priors.
+
+    Parameters
+    ----------
+    prior_type: str
+        Type of prior to use: "relion" or "laplacian". Default is "relion".
+    sigma_A_exponential: bool
+        Whether to use exponential decay for sigma_A over frames. Default is False.
+    init_sigma_A: float
+        sigma_A (temporal smoothness). Default is 0.513517.
+    init_alpha_spatial: float
+        alpha_spatial (spatial smoothness strength for Laplacian prior).
+        Default is 1e5.
+    init_sigma_D: float
+        sigma_D (spatial correlation length in Angstroms for RELION prior).
+        Default is 5782.376953.
+    init_sigma_V: float
+        sigma_V (velocity magnitude scale in Å per unit fluence for
+        RELION prior). Default is 0.194826.
+    init_sigma_A_amplitude: float
+        Amplitude A in exponential sigma_A formula: A*exp(-B*fluence) + C.
+        Default is 2.0.
+    init_sigma_A_decay: float
+        Decay rate B in exponential sigma_A formula: A*exp(-B*fluence) + C.
+        Default is 0.1.
+    init_sigma_A_offset: float
+        Constant offset C in exponential sigma_A formula: A*exp(-B*fluence) + C.
+        Default is 1.0.
+    """
+
+    prior_type: str = "relion"
+    sigma_A_exponential: bool = False
+    init_sigma_A: float = 0.513517
+    init_alpha_spatial: float = 1e5
+    init_sigma_D: float = 5782.376953
+    init_sigma_V: float = 0.194826
+    init_sigma_A_amplitude: float = 2.0
+    init_sigma_A_decay: float = 0.1
+    init_sigma_A_offset: float = 1.0
+
+
+class OptimizationConfig(BaseModelRIPPLE):
+    """Configuration for sigma optimization.
+
+    Parameters
+    ----------
+    optimize_algorithm: Literal["nelder-mead", "bayesian"]
+        Algorithm to use for sigma optimization. Options are:
+        - 'nelder-mead': Nelder-Mead (simplex) method
+        - 'bayesian': Bayesian optimization using Optuna
+        Default is 'bayesian'.
+    validation_template_path: str
+        Path to validation template (.mrc) for sigma optimization.
+        Required for sigma optimization.
+    sigma_iterations: int
+        Number of outer loop iterations for sigma optimization. Default is 50.
+    motion_iterations: int
+        Number of inner loop motion iterations per sigma update. Default is 20.
+    optimized_sigmas_output_path: str | None
+        Path to save optimized sigma values. Default is None.
+    sigma_history_output_path: str | None
+        Path to save sigma optimization history. Default is None.
+    training_history_output_path: str | None
+        Path to save training history. Default is None.
+    validation_history_output_path: str | None
+        Path to save validation history. Default is None.
+    """
+
+    optimize_algorithm: Literal["nelder-mead", "bayesian"] = "bayesian"
+    validation_template_path: str
+    sigma_iterations: PositiveInt = 50
+    motion_iterations: PositiveInt = 20
+    optimized_sigmas_output_path: str | None = None
+    sigma_history_output_path: str | None = None
+    training_history_output_path: str | None = None
+    validation_history_output_path: str | None = None
+
+
 class PolishParticlesConfig(BaseAlignmentConfig):
     """Configuration for polishing particles.
 
@@ -134,66 +213,23 @@ class PolishParticlesConfig(BaseAlignmentConfig):
         Maximum number of particles to use for optimization, selecting the top N
         particles with the highest loss_metric values. Default is 10000000000
         (essentially unlimited).
-    optimize_sigmas: bool
-        Whether to optimize sigma hyperparameters using a validation template.
-        Default is False.
-    optimize_algorithm: Literal["gradient", "nelder-mead", "bayesian"]
-        Algorithm to use for sigma optimization. Options are:
-        - 'gradient': Gradient-based optimization
-        - 'nelder-mead': Nelder-Mead (simplex) method
-        - 'bayesian': Bayesian optimization using Optuna
-        Default is 'gradient'.
-    validation_template_path: str | None
-        Path to validation template (.mrc) for sigma optimization.
-        Required if optimize_sigmas is True.
-    sigma_iterations: int
-        Number of outer loop iterations for sigma optimization. Default is 20.
-    motion_iterations: int
-        Number of inner loop motion iterations per sigma update. Default is 10.
-    init_sigma_A: float
-        Initial sigma_A (temporal smoothness) for constant mode. Default is 0.513517.
-    init_alpha_spatial: float
-        Initial alpha_spatial (spatial smoothness strength for Laplacian prior).
-        Default is 1e5.
-    init_sigma_A_amplitude: float
-        Initial amplitude A in exponential sigma_A formula: A*exp(-B*fluence) + C.
-        Default is 2.0.
-    init_sigma_A_decay: float
-        Initial decay rate B in exponential sigma_A formula: A*exp(-B*fluence) + C.
-        Default is 0.1.
-    init_sigma_A_offset: float
-        Initial constant offset C in exponential sigma_A formula: A*exp(-B*fluence) + C.
-        Default is 1.0.
-    sigma_A_exponential: bool
-        Whether to use exponential decay for sigma_A over frames. Default is False.
-    init_sigma_D: float
-        Initial sigma_D (spatial correlation length in Angstroms for RELION prior).
-        Default is 5782.376953.
-    init_sigma_V: float
-        Initial sigma_V (velocity magnitude scale in Å per unit fluence for
-        RELION prior). Default is 0.194826.
+    prior_config: PriorConfig
+        Configuration for motion priors. Defaults to PriorConfig().
+    optimization_config: OptimizationConfig | None
+        Configuration for sigma optimization. If None, optimization is disabled.
+        Default is None.
     """
 
     particle_df_path: str
     loss_metric: Literal["mip", "scaled_mip"] = "scaled_mip"
     min_snr: float = 0.0
     best_n: PositiveInt = 10000000000
-    optimize_sigmas: bool = False
-    optimize_algorithm: Literal["gradient", "nelder-mead", "bayesian"] = "bayesian"
-    validation_template_path: str | None = None
-    sigma_iterations: PositiveInt = 50
-    motion_iterations: PositiveInt = 20
-    # Initial sigma hyperparameters for optimization
-    init_sigma_A: float = 0.513517
-    init_alpha_spatial: float = 1e5
-    init_sigma_A_amplitude: float = 2.0
-    init_sigma_A_decay: float = 0.1
-    init_sigma_A_offset: float = 1.0
-    sigma_A_exponential: bool = False
-    init_sigma_D: float = 5782.376953
-    init_sigma_V: float = 0.194826
-    # Output paths for sigma optimization results
-    optimized_sigmas_output_path: str | None = None
-    sigma_history_output_path: str | None = None
-    training_history_output_path: str | None = None
-    validation_history_output_path: str | None = None
+
+    # Nested configs with defaults
+    prior_config: PriorConfig = Field(default_factory=PriorConfig)  # type: ignore[assignment]
+    optimization_config: OptimizationConfig | None = None
+
+    @property
+    def optimize_sigmas(self) -> bool:
+        """Whether sigma optimization is enabled."""
+        return self.optimization_config is not None

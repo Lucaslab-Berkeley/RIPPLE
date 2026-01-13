@@ -1,8 +1,9 @@
 """Utility functions dealing with basic data I/O operations."""
 
+import json
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import eerfile
 import mrcfile
@@ -309,3 +310,62 @@ def load_template_volume_from_config(
     template_volume = read_mrc_to_tensor(template_volume_path)
 
     return template_volume
+
+
+def save_optimize_sigmas_to_json(
+    optimized_sigmas: dict[str, Any],
+    sigma_history: list[dict[str, Any]],
+    training_loss_history: list[float],
+    validation_loss_history: list[float],
+    optimized_sigmas_output_path: str | None = None,
+    sigma_history_output_path: str | None = None,
+    training_history_output_path: str | None = None,
+    validation_history_output_path: str | None = None,
+    verbose: bool = True,
+) -> None:
+    """Save sigma optimization results to JSON files.
+
+    Parameters
+    ----------
+    optimized_sigmas : dict[str, Any]
+        Dictionary of optimized sigma values
+    sigma_history : list[dict[str, Any]]
+        List of sigma values at each iteration/trial
+    training_loss_history : list[float]
+        List of training losses at each iteration/trial
+    validation_loss_history : list[float]
+        List of validation losses at each iteration/trial
+    optimized_sigmas_output_path : str | None
+        Path to save final optimized sigmas as JSON. Default None
+    sigma_history_output_path : str | None
+        Path to save sigma history as JSON. Default None
+    training_history_output_path : str | None
+        Path to save training loss history as JSON. Default None
+    validation_history_output_path : str | None
+        Path to save validation loss history as JSON. Default None
+    verbose : bool
+        Print messages when saving files. Default True
+    """
+    if optimized_sigmas_output_path is not None:
+        with open(optimized_sigmas_output_path, 'w', encoding='utf-8') as f:
+            json.dump(optimized_sigmas, f, indent=2)
+        if verbose:
+            print(f"Saved optimized sigmas to: {optimized_sigmas_output_path}")
+
+    if sigma_history_output_path is not None:
+        with open(sigma_history_output_path, 'w', encoding='utf-8') as f:
+            json.dump(sigma_history, f, indent=2)
+        if verbose:
+            print(f"Saved sigma history to: {sigma_history_output_path}")
+
+    if training_history_output_path is not None:
+        with open(training_history_output_path, 'w', encoding='utf-8') as f:
+            json.dump(training_loss_history, f, indent=2)
+        if verbose:
+            print(f"Saved training history to: {training_history_output_path}")
+
+    if validation_history_output_path is not None:
+        with open(validation_history_output_path, 'w', encoding='utf-8') as f:
+            json.dump(validation_loss_history, f, indent=2)
+        if verbose:
+            print(f"Saved validation history to: {validation_history_output_path}")

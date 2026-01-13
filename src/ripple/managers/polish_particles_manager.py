@@ -88,6 +88,19 @@ class PolishParticlesManager(BaseModelRIPPLE):
             "loss_metric": self.alignment_config.loss_metric,
             "min_snr": self.alignment_config.min_snr,
             "best_n": self.alignment_config.best_n,
+            "prior_type": self.alignment_config.prior_config.prior_type,
+            "sigma_D": self.alignment_config.prior_config.init_sigma_D,
+            "sigma_V": self.alignment_config.prior_config.init_sigma_V,
+            "sigma_A": self.alignment_config.prior_config.init_sigma_A,
+            "alpha_spatial": self.alignment_config.prior_config.init_alpha_spatial,
+            "sigma_A_exponential": (
+                self.alignment_config.prior_config.sigma_A_exponential
+            ),
+            "sigma_A_amplitude": (
+                self.alignment_config.prior_config.init_sigma_A_amplitude
+            ),
+            "sigma_A_decay": self.alignment_config.prior_config.init_sigma_A_decay,
+            "sigma_A_offset": self.alignment_config.prior_config.init_sigma_A_offset,
         }
         return backend_kwargs
 
@@ -148,15 +161,15 @@ class PolishParticlesManager(BaseModelRIPPLE):
 
         # Check if we should run sigma optimization
         if self.alignment_config.optimize_sigmas:
-            if self.alignment_config.validation_template_path is None:
+            opt_config = self.alignment_config.optimization_config
+            if opt_config is None:
                 raise ValueError(
-                    "validation_template_path must be provided when "
-                    "optimize_sigmas=True"
+                    "optimization_config must be provided when optimize_sigmas=True"
                 )
 
             # Call core_optimize_sigmas instead
             result = core_optimize_sigmas(
-                optimize_algorithm=self.alignment_config.optimize_algorithm,
+                optimize_algorithm=opt_config.optimize_algorithm,
                 image=core_kwargs["movie"],
                 var_image=core_kwargs["var_image"],
                 mean_image=core_kwargs["mean_image"],
@@ -164,30 +177,29 @@ class PolishParticlesManager(BaseModelRIPPLE):
                 deformation_field_resolution=core_kwargs["deformation_field_resolution"],
                 initial_deformation_field=core_kwargs["initial_deformation_field"],
                 refine_config_path=core_kwargs["refine_config_path"],
-                validation_template_path=self.alignment_config.validation_template_path,
+                validation_template_path=opt_config.validation_template_path,
                 pre_exposure=core_kwargs["pre_exposure"],
                 fluence_per_frame=core_kwargs["fluence_per_frame"],
-                motion_iterations=self.alignment_config.motion_iterations,
-                sigma_iterations=self.alignment_config.sigma_iterations,
-                optimizer_kwargs=core_kwargs["optimizer_kwargs"],
+                motion_iterations=opt_config.motion_iterations,
+                sigma_iterations=opt_config.sigma_iterations,
                 particle_batch_size=particle_batch_size,
                 particle_indices=core_kwargs["particle_indices"],
                 device=core_kwargs["device"],
                 loss_metric=core_kwargs["loss_metric"],
                 min_snr=core_kwargs["min_snr"],
                 best_n=core_kwargs["best_n"],
-                init_sigma_A=self.alignment_config.init_sigma_A,
-                init_alpha_spatial=self.alignment_config.init_alpha_spatial,
-                init_sigma_A_amplitude=self.alignment_config.init_sigma_A_amplitude,
-                init_sigma_A_decay=self.alignment_config.init_sigma_A_decay,
-                init_sigma_A_offset=self.alignment_config.init_sigma_A_offset,
-                sigma_A_exponential=self.alignment_config.sigma_A_exponential,
-                init_sigma_D=self.alignment_config.init_sigma_D,
-                init_sigma_V=self.alignment_config.init_sigma_V,
-                optimized_sigmas_output_path=self.alignment_config.optimized_sigmas_output_path,
-                sigma_history_output_path=self.alignment_config.sigma_history_output_path,
-                training_history_output_path=self.alignment_config.training_history_output_path,
-                validation_history_output_path=self.alignment_config.validation_history_output_path,
+                init_sigma_A=self.alignment_config.prior_config.init_sigma_A,
+                init_alpha_spatial=self.alignment_config.prior_config.init_alpha_spatial,
+                init_sigma_A_amplitude=self.alignment_config.prior_config.init_sigma_A_amplitude,
+                init_sigma_A_decay=self.alignment_config.prior_config.init_sigma_A_decay,
+                init_sigma_A_offset=self.alignment_config.prior_config.init_sigma_A_offset,
+                sigma_A_exponential=self.alignment_config.prior_config.sigma_A_exponential,
+                init_sigma_D=self.alignment_config.prior_config.init_sigma_D,
+                init_sigma_V=self.alignment_config.prior_config.init_sigma_V,
+                optimized_sigmas_output_path=opt_config.optimized_sigmas_output_path,
+                sigma_history_output_path=opt_config.sigma_history_output_path,
+                training_history_output_path=opt_config.training_history_output_path,
+                validation_history_output_path=opt_config.validation_history_output_path,
             )
 
             # Extract results
