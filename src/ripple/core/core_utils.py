@@ -182,6 +182,7 @@ def _create_batch_configs(
     refine_config_path: str,
     particle_batch_size: int,
     temp_dir: Path,
+    prefix: str = "batch",
 ) -> tuple[list[str], list[list[pd.Index]]]:
     """
     Split the particle CSV into batches and create temporary config files.
@@ -194,6 +195,8 @@ def _create_batch_configs(
         Number of particles per batch.
     temp_dir : Path
         Temporary directory to store batch configs and CSVs.
+    prefix : str
+        Prefix for batch file names to avoid collisions. Default "batch".
 
     Returns
     -------
@@ -234,7 +237,7 @@ def _create_batch_configs(
         batch_df = df.iloc[start_idx:end_idx]
 
         # Save batch CSV (this will have row indices 0 to len(batch_df)-1)
-        batch_csv_path = temp_dir / f"batch_{batch_idx}_particles.csv"
+        batch_csv_path = temp_dir / f"{prefix}_{batch_idx}_particles.csv"
         batch_df.to_csv(batch_csv_path)
 
         # Create batch particle indices
@@ -255,7 +258,7 @@ def _create_batch_configs(
             )
 
         # Save batch config
-        batch_config_path = temp_dir / f"batch_{batch_idx}_config.yaml"
+        batch_config_path = temp_dir / f"{prefix}_{batch_idx}_config.yaml"
         with open(batch_config_path, "w", encoding="utf-8") as f:
             yaml.dump(batch_config, f)
 

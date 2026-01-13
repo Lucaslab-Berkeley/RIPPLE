@@ -481,6 +481,10 @@ def optimize_sigmas_2dtm_nelder_mead(
     best_sigma_iter = None
     best_sigma_params = None
 
+    # Counter for outer loop iterations (Nelder-Mead)
+    # Use list to allow modification in nested function
+    outer_iter_counter = [0]  # pylint: disable=unused-variable
+
     # Objective function for scipy.optimize.minimize
     def objective_function(x: np.ndarray) -> float:
         """Objective function for Nelder-Mead optimization.
@@ -492,6 +496,10 @@ def optimize_sigmas_2dtm_nelder_mead(
         -------
             validation_loss: float
         """
+        # Increment and print outer iteration number
+        outer_iter_counter[0] += 1
+        print(f"Outer iteration (Nelder-Mead): {outer_iter_counter[0]}")
+
         # Set sigma parameters from x
         for i, param_name in enumerate(param_names):
             sigma_params[param_name] = float(x[i])
@@ -1020,6 +1028,9 @@ def optimize_sigmas_2dtm_optuna(
     # Objective function for Optuna
     def objective(trial: optuna.Trial) -> float:
         """Objective function for Optuna optimization."""
+        # Print outer iteration number (trial number)
+        print(f"Outer iteration (Optuna trial): {trial.number + 1}")
+
         # Type assertion: initial_values is a dict for Optuna (use_dict=True)
         assert isinstance(initial_values, dict), (
             "initial_values must be a dict for Optuna"
@@ -1304,14 +1315,21 @@ def _compute_validation_loss_common(
     """
     val_loss = 0.0
     with torch.no_grad():
-        for batch_config_path, batch_indices in zip(
-            batch_config_paths, batch_particle_indices, strict=True
+        for batch_idx, (batch_config_path, batch_indices) in enumerate(
+            zip(batch_config_paths, batch_particle_indices, strict=True)
         ):
+            batch_size = len(batch_indices[0])
             batch_refine_manager = _make_differentiable_refine_manager(
                 batch_config_path
             )
+            actual_particle_count = batch_refine_manager.particle_stack.num_particles
+            print(
+                f"    Validation batch {batch_idx + 1}: "
+                f"indices={batch_size}, "
+                f"actual={actual_particle_count}, "
+                f"config={Path(batch_config_path).name}"
+            )
             batch_particle_stack = batch_refine_manager.particle_stack
-            batch_size = len(batch_indices[0])
 
             image_stack_batch = batch_particle_stack.construct_image_stack_from_movie(
                 movie=image,
@@ -1885,8 +1903,16 @@ def _setup_optimizer(
         refine_config_path=refine_config_path,
         particle_batch_size=particle_batch_size,
         temp_dir=temp_dir,
+        prefix="train_batch",
     )
     total_n_particles = sum(len(indices[0]) for indices in batch_particle_indices)
+    print(
+        f"Training particles: total={total_n_particles}, "
+        f"batches={len(batch_particle_indices)}"
+    )
+    for batch_idx, batch_indices in enumerate(batch_particle_indices):
+        batch_size = len(batch_indices[0])
+        print(f"  Batch {batch_idx + 1}: {batch_size} particles")
 
     # Pre-compute mean/std stacks for all batches (they don't change across iterations)
     batch_mean_stacks, batch_std_stacks = get_batch_mean_std_stacks(
@@ -1903,11 +1929,19 @@ def _setup_optimizer(
                 refine_config_path=optimize_particle_df_path,
                 particle_batch_size=particle_batch_size,
                 temp_dir=temp_dir,
+                prefix="val_batch",
             )
         )
         validation_total_n_particles = sum(
             len(indices[0]) for indices in validation_batch_particle_indices
         )
+        print(
+            f"Validation particles: total={validation_total_n_particles}, "
+            f"batches={len(validation_batch_particle_indices)}"
+        )
+        for batch_idx, batch_indices in enumerate(validation_batch_particle_indices):
+            batch_size = len(batch_indices[0])
+            print(f"  Validation batch {batch_idx + 1}: {batch_size} particles")
         validation_batch_mean_stacks, validation_batch_std_stacks = (
             get_batch_mean_std_stacks(
                 batch_config_paths=validation_batch_config_paths,
@@ -2061,17 +2095,29 @@ def _run_inner_optimization_common(
     # Inner loop: motion optimization
     accumulated_loss = 0.0
     for iter_idx in range(motion_iterations):
+        print(f"  Inner iteration: {iter_idx + 1}/{motion_iterations}")
         motion_optimizer.zero_grad()
         batch_accumulated_loss = 0.0
 
-        for batch_config_path, batch_indices in zip(
-            batch_config_paths, batch_particle_indices, strict=True
+        for batch_idx, (batch_config_path, batch_indices) in enumerate(
+            zip(batch_config_paths, batch_particle_indices, strict=True)
         ):
+            batch_size = len(batch_indices[0])
             batch_refine_manager = _make_differentiable_refine_manager(
                 batch_config_path
             )
+            if iter_idx == 0:  # Only print batch info on first iteration
+                # Get actual number of particles from the stack
+                actual_particle_count = (
+                    batch_refine_manager.particle_stack.num_particles
+                )
+                print(
+                    f"    Training batch {batch_idx + 1}: "
+                    f"indices={batch_size}, "
+                    f"actual={actual_particle_count}, "
+                    f"config={Path(batch_config_path).name}"
+                )
             batch_particle_stack = batch_refine_manager.particle_stack
-            batch_size = len(batch_indices[0])
 
             image_stack_batch = batch_particle_stack.construct_image_stack_from_movie(
                 movie=image,
