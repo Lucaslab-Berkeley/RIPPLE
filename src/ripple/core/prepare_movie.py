@@ -88,9 +88,9 @@ def apply_gain(
 
     # Apply transformations to gain map
     if gain_flip == 1:
-        gain_map = torch.flip(gain_map, axis=0)  # flipY
+        gain_map = gain_map.flip(0)  # flipY
     elif gain_flip == 2:
-        gain_map = torch.flip(gain_map, axis=1)  # flipX
+        gain_map = gain_map.flip(1)  # flipX
 
     if gain_rot != 0:
         gain_map = torch.rot90(gain_map, k=-gain_rot)

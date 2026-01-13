@@ -172,6 +172,7 @@ def _normalize_sigma_fluence(
     return sigma * fluence_per_frame
 
 
+# pylint: disable=too-many-arguments,too-many-positional-arguments
 def _create_exponential_sigma_a(
     total_fluence: float,
     n_frames: int,
@@ -230,6 +231,7 @@ def _create_exponential_sigma_a(
     return sigma_a
 
 
+# pylint: disable=too-many-locals
 def _compute_physical_spacing(
     image_shape: tuple[int, int],
     pixel_size: float,
@@ -664,8 +666,7 @@ def laplacian_e_time(
 # --------------------------------------------------------------------------
 # Convenience wrappers
 # --------------------------------------------------------------------------
-
-
+# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
 def relion2019_compute(
     field: torch.Tensor,
     coords: torch.Tensor,
@@ -742,6 +743,7 @@ def relion2019_compute(
     return e_space, e_time
 
 
+# pylint: disable=too-many-arguments,too-many-positional-arguments
 def separable_compute(
     field: torch.Tensor,
     lam_x: torch.Tensor,

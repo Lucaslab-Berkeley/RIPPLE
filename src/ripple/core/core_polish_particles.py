@@ -1318,7 +1318,6 @@ def _setup_priors(
             "spatial_spacing": spatial_spacing,
             "temporal_spacing": temporal_spacing,
         }
-    else:
-        raise ValueError(
-            f"Unknown prior_type: {prior_type}. Must be 'relion' or 'laplacian'"
-        )
+    raise ValueError(
+        f"Unknown prior_type: {prior_type}. Must be 'relion' or 'laplacian'"
+    )
