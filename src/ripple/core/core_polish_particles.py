@@ -29,7 +29,7 @@ from .generate_image import dose_weight_memory_efficient
 from .motion_priors import (
     _build_physical_coords,
     _compute_physical_spacing,
-    _create_exponential_sigma_A,
+    _create_exponential_sigma_a,
     _normalize_sigma_fluence,
     laplacian_compute,
     relion2019_compute,
@@ -72,14 +72,14 @@ def core_polish_particles(
     save_intermediate_fields: bool = False,
     intermediate_fields_dir: str = ".",
     prior_type: str = "relion",
-    sigma_D: float = 5782.376953,
-    sigma_V: float = 0.194826,
-    sigma_A: float = 0.513517,
+    sigma_d: float = 5782.376953,
+    sigma_v: float = 0.194826,
+    sigma_a: float = 0.513517,
     alpha_spatial: float = 1e5,
-    sigma_A_exponential: bool = False,
-    sigma_A_amplitude: float = 2.0,
-    sigma_A_decay: float = 0.1,
-    sigma_A_offset: float = 1.0,
+    sigma_a_exponential: bool = False,
+    sigma_a_amplitude: float = 2.0,
+    sigma_a_decay: float = 0.1,
+    sigma_a_offset: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, OptimizationTracker | None]:
     """
     Core function for polishing particles.
@@ -153,27 +153,27 @@ def core_polish_particles(
         Directory to save the intermediate fields.
     prior_type: str
         Type of prior to use. Default is 'relion'.
-    sigma_D: float
+    sigma_d: float
         Spatial correlation length in Angstroms for RELION prior.
         Default is 5782.376953.
-    sigma_V: float
+    sigma_v: float
         Velocity magnitude scale in Å per unit fluence for RELION prior.
         Default is 0.194826.
-    sigma_A: float
+    sigma_a: float
         Temporal smoothness parameter. Default is 0.513517.
     alpha_spatial: float
         Spatial smoothness strength for Laplacian prior. Default is 1e5.
-    sigma_A_exponential: bool
-        Whether to use exponential decay for sigma_A over frames. Default is False.
-    sigma_A_amplitude: float
-        Amplitude A in exponential sigma_A formula: A*exp(-B*fluence) + C.
-        Default is 2.0.
-    sigma_A_decay: float
-        Decay rate B in exponential sigma_A formula: A*exp(-B*fluence) + C.
-        Default is 0.1.
-    sigma_A_offset: float
-        Constant offset C in exponential sigma_A formula: A*exp(-B*fluence) + C.
-        Default is 1.0.
+    sigma_a_exponential: bool
+        Whether to use exponential decay for sigma_a over frames. Default is False.
+    sigma_a_amplitude: float
+        Amplitude in exponential sigma_a formula:
+        amplitude*exp(-decay_rate*fluence) + offset. Default is 2.0.
+    sigma_a_decay: float
+        Decay rate in exponential sigma_a formula:
+        amplitude*exp(-decay_rate*fluence) + offset. Default is 0.1.
+    sigma_a_offset: float
+        Constant offset in exponential sigma_a formula:
+        amplitude*exp(-decay_rate*fluence) + offset. Default is 1.0.
 
     Returns
     -------
@@ -219,14 +219,14 @@ def core_polish_particles(
     # Prior parameters only for bayesian estimation
     prior_kwargs: dict[str, Any] = {
         "prior_type": prior_type,
-        "sigma_D": sigma_D,
-        "sigma_V": sigma_V,
-        "sigma_A": sigma_A,
+        "sigma_d": sigma_d,
+        "sigma_v": sigma_v,
+        "sigma_a": sigma_a,
         "alpha_spatial": alpha_spatial,
-        "sigma_A_exponential": sigma_A_exponential,
-        "sigma_A_amplitude": sigma_A_amplitude,
-        "sigma_A_decay": sigma_A_decay,
-        "sigma_A_offset": sigma_A_offset,
+        "sigma_a_exponential": sigma_a_exponential,
+        "sigma_a_amplitude": sigma_a_amplitude,
+        "sigma_a_decay": sigma_a_decay,
+        "sigma_a_offset": sigma_a_offset,
     }
 
     # estimate the motion
@@ -307,14 +307,14 @@ def estimate_local_motion_2dtm_bayesian(
     save_intermediate_fields: bool = False,
     intermediate_fields_dir: str = ".",
     prior_type: str = "relion",
-    sigma_D: float = 5782.376953,
-    sigma_V: float = 0.194826,
-    sigma_A: float = 0.513517,
+    sigma_d: float = 5782.376953,
+    sigma_v: float = 0.194826,
+    sigma_a: float = 0.513517,
     alpha_spatial: float = 1e5,
-    sigma_A_exponential: bool = False,
-    sigma_A_amplitude: float = 2.0,
-    sigma_A_decay: float = 0.1,
-    sigma_A_offset: float = 1.0,
+    sigma_a_exponential: bool = False,
+    sigma_a_amplitude: float = 2.0,
+    sigma_a_decay: float = 0.1,
+    sigma_a_offset: float = 1.0,
 ) -> torch.Tensor | tuple[torch.Tensor, OptimizationTracker]:
     """Estimate motion (new method).
 
@@ -374,22 +374,30 @@ def estimate_local_motion_2dtm_bayesian(
         Directory to save the intermediate fields.
     prior_type: str
         Type of motion prior: "relion" or "laplacian". Default is "relion".
-    sigma_D: float
-        Spatial correlation length in Angstroms (RELION only). Default is 5000.0.
-    sigma_V: float
-        Velocity magnitude scale in Å per unit fluence (RELION only). Default is 1.0.
-    sigma_A_exponential: bool
-        Use exponential decay for sigma_A over frames. Default is False.
-    sigma_A_amplitude: float
-        Amplitude A in sigma_A[f] = A * exp(B * f). Default is 2.0.
-    sigma_A_decay: float
-        Decay rate B in sigma_A = A*exp(-B*fluence) + C. Default is 0.1 (1/(e-/Å²)).
-    sigma_A_offset: float
-        Constant offset C in sigma_A = A*exp(-B*fluence) + C. Default is 1.0.
-    sigma_A: float
-        Temporal smoothness in Å/(e-/Å²). Smaller = smoother. Default is 1.0.
+    sigma_d: float
+        Spatial correlation length in Angstroms (RELION only).
+        Default is 5782.376953.
+    sigma_v: float
+        Velocity magnitude scale in Å per unit fluence (RELION only).
+        Default is 0.194826.
+    sigma_a: float
+        Temporal smoothness in Å/(e-/Å²). Smaller = smoother.
+        Default is 0.513517.
     alpha_spatial: float
-        Spatial smoothness strength (Laplacian only). Larger = smoother. Default is 1.0.
+        Spatial smoothness strength (Laplacian only). Larger = smoother.
+        Default is 1e5.
+    sigma_a_exponential: bool
+        Use exponential decay for sigma_a over frames. Default is False.
+    sigma_a_amplitude: float
+        Amplitude in exponential sigma_a formula:
+        amplitude*exp(-decay_rate*fluence) + offset. Default is 2.0.
+    sigma_a_decay: float
+        Decay rate in exponential sigma_a formula:
+        amplitude*exp(-decay_rate*fluence) + offset.
+        Default is 0.1 (1/(e-/Å²)).
+    sigma_a_offset: float
+        Constant offset in exponential sigma_a formula:
+        amplitude*exp(-decay_rate*fluence) + offset. Default is 1.0.
 
     Returns
     -------
@@ -440,12 +448,12 @@ def estimate_local_motion_2dtm_bayesian(
     # Setup prior-specific parameters
     prior_params = _setup_priors(
         prior_type=prior_type,
-        sigma_A_exponential=sigma_A_exponential,
-        sigma_A=sigma_A,
-        sigma_A_amplitude=sigma_A_amplitude,
-        sigma_A_decay=sigma_A_decay,
-        sigma_A_offset=sigma_A_offset,
-        sigma_V=sigma_V,
+        sigma_a_exponential=sigma_a_exponential,
+        sigma_a=sigma_a,
+        sigma_a_amplitude=sigma_a_amplitude,
+        sigma_a_decay=sigma_a_decay,
+        sigma_a_offset=sigma_a_offset,
+        sigma_v=sigma_v,
         image=image,
         fluence_per_frame=fluence_per_frame,
         deformation_field_resolution=deformation_field_resolution,
@@ -453,8 +461,8 @@ def estimate_local_motion_2dtm_bayesian(
         device=device,
     )
     image_coords = prior_params.get("image_coords")
-    sigma_V_norm = prior_params.get("sigma_V_norm")
-    sigma_A_norm = prior_params["sigma_A_norm"]
+    sigma_v_norm = prior_params.get("sigma_v_norm")
+    sigma_a_norm = prior_params["sigma_a_norm"]
     spatial_spacing = prior_params.get("spatial_spacing")
     temporal_spacing = prior_params.get("temporal_spacing")
 
@@ -544,9 +552,9 @@ def estimate_local_motion_2dtm_bayesian(
             batch_size=1,
             total_n_particles=1,
             image_coords=image_coords,
-            sigma_D=sigma_D,
-            sigma_V_norm=sigma_V_norm,
-            sigma_A_norm=sigma_A_norm,
+            sigma_d=sigma_d,
+            sigma_v_norm=sigma_v_norm,
+            sigma_a_norm=sigma_a_norm,
             alpha_spatial=alpha_spatial,
             spatial_spacing=spatial_spacing,
             temporal_spacing=temporal_spacing,
@@ -608,14 +616,14 @@ def estimate_local_motion_2dtm_particles_bayesian(
     save_intermediate_fields: bool = False,
     intermediate_fields_dir: str = ".",
     prior_type: str = "relion",
-    sigma_D: float = 5782.376953,
-    sigma_V: float = 0.194826,
-    sigma_A: float = 0.513517,
+    sigma_d: float = 5782.376953,
+    sigma_v: float = 0.194826,
+    sigma_a: float = 0.513517,
     alpha_spatial: float = 1e5,
-    sigma_A_exponential: bool = False,
-    sigma_A_amplitude: float = 2.0,
-    sigma_A_decay: float = 0.1,
-    sigma_A_offset: float = 1.0,
+    sigma_a_exponential: bool = False,
+    sigma_a_amplitude: float = 2.0,
+    sigma_a_decay: float = 0.1,
+    sigma_a_offset: float = 1.0,
 ) -> torch.Tensor | tuple[torch.Tensor, OptimizationTracker]:
     """Estimate motion (new method).
 
@@ -674,22 +682,30 @@ def estimate_local_motion_2dtm_particles_bayesian(
         Directory to save the intermediate fields.
     prior_type: str
         Type of motion prior: "relion" or "laplacian". Default is "relion".
-    sigma_D: float
-        Spatial correlation length in Angstroms (RELION only). Default is 5000.0.
-    sigma_V: float
-        Velocity magnitude scale in Å per unit fluence (RELION only). Default is 1.0.
-    sigma_A_exponential: bool
-        Use exponential decay for sigma_A over frames. Default is False.
-    sigma_A_amplitude: float
-        Amplitude A in sigma_A[f] = A * exp(B * f). Default is 2.0.
-    sigma_A_decay: float
-        Decay rate B in sigma_A = A*exp(-B*fluence) + C. Default is 0.1 (1/(e-/Å²)).
-    sigma_A_offset: float
-        Constant offset C in sigma_A = A*exp(-B*fluence) + C. Default is 1.0.
-    sigma_A: float
-        Temporal smoothness in Å/(e-/Å²). Smaller = smoother. Default is 1.0.
+    sigma_d: float
+        Spatial correlation length in Angstroms (RELION only).
+        Default is 5782.376953.
+    sigma_v: float
+        Velocity magnitude scale in Å per unit fluence (RELION only).
+        Default is 0.194826.
+    sigma_a: float
+        Temporal smoothness in Å/(e-/Å²). Smaller = smoother.
+        Default is 0.513517.
     alpha_spatial: float
-        Spatial smoothness strength (Laplacian only). Larger = smoother. Default is 1.0.
+        Spatial smoothness strength (Laplacian only). Larger = smoother.
+        Default is 1e5.
+    sigma_a_exponential: bool
+        Use exponential decay for sigma_a over frames. Default is False.
+    sigma_a_amplitude: float
+        Amplitude in exponential sigma_a formula:
+        amplitude*exp(-decay_rate*fluence) + offset. Default is 2.0.
+    sigma_a_decay: float
+        Decay rate in exponential sigma_a formula:
+        amplitude*exp(-decay_rate*fluence) + offset.
+        Default is 0.1 (1/(e-/Å²)).
+    sigma_a_offset: float
+        Constant offset in exponential sigma_a formula:
+        amplitude*exp(-decay_rate*fluence) + offset. Default is 1.0.
 
     Returns
     -------
@@ -755,12 +771,12 @@ def estimate_local_motion_2dtm_particles_bayesian(
     # Setup prior-specific parameters
     prior_params = _setup_priors(
         prior_type=prior_type,
-        sigma_A_exponential=sigma_A_exponential,
-        sigma_A=sigma_A,
-        sigma_A_amplitude=sigma_A_amplitude,
-        sigma_A_decay=sigma_A_decay,
-        sigma_A_offset=sigma_A_offset,
-        sigma_V=sigma_V,
+        sigma_a_exponential=sigma_a_exponential,
+        sigma_a=sigma_a,
+        sigma_a_amplitude=sigma_a_amplitude,
+        sigma_a_decay=sigma_a_decay,
+        sigma_a_offset=sigma_a_offset,
+        sigma_v=sigma_v,
         image=image,
         fluence_per_frame=fluence_per_frame,
         deformation_field_resolution=deformation_field_resolution,
@@ -768,8 +784,8 @@ def estimate_local_motion_2dtm_particles_bayesian(
         device=device,
     )
     image_coords = prior_params.get("image_coords")
-    sigma_V_norm = prior_params.get("sigma_V_norm")
-    sigma_A_norm = prior_params["sigma_A_norm"]
+    sigma_v_norm = prior_params.get("sigma_v_norm")
+    sigma_a_norm = prior_params["sigma_a_norm"]
     spatial_spacing = prior_params.get("spatial_spacing")
     temporal_spacing = prior_params.get("temporal_spacing")
 
@@ -866,9 +882,9 @@ def estimate_local_motion_2dtm_particles_bayesian(
                     batch_size=batch_size,
                     total_n_particles=total_n_particles,
                     image_coords=image_coords,
-                    sigma_D=sigma_D,
-                    sigma_V_norm=sigma_V_norm,
-                    sigma_A_norm=sigma_A_norm,
+                    sigma_d=sigma_d,
+                    sigma_v_norm=sigma_v_norm,
+                    sigma_a_norm=sigma_a_norm,
                     alpha_spatial=alpha_spatial,
                     spatial_spacing=spatial_spacing,
                     temporal_spacing=temporal_spacing,
@@ -1088,9 +1104,9 @@ def _compute_loss(
     batch_size: int,
     total_n_particles: int,
     image_coords: torch.Tensor | None = None,
-    sigma_D: float | None = None,
-    sigma_V_norm: float | None = None,
-    sigma_A_norm: torch.Tensor | float | None = None,
+    sigma_d: float | None = None,
+    sigma_v_norm: float | None = None,
+    sigma_a_norm: torch.Tensor | float | None = None,
     alpha_spatial: float | None = None,
     spatial_spacing: tuple[float, float] | None = None,
     temporal_spacing: float | None = None,
@@ -1111,18 +1127,18 @@ def _compute_loss(
         Total number of particles across all batches.
     image_coords: torch.Tensor | None
         Physical coordinates for RELION prior. Required if prior_type is "relion".
-    sigma_D: float | None
+    sigma_d: float | None
         Spatial correlation length for RELION prior. Required if prior_type is "relion".
-    sigma_V_norm: float | None
+    sigma_v_norm: float | None
         Normalized velocity magnitude scale for RELION prior.
         Required if prior_type is "relion".
-    sigma_A_norm: torch.Tensor | float | None
+    sigma_a_norm: torch.Tensor | float | None
         Normalized temporal smoothness parameter.
         Required for both prior types.
     alpha_spatial: float | None
         Spatial smoothness strength for Laplacian prior.
         Required if prior_type is "laplacian".
-    spatial_spacing: float | None
+    spatial_spacing: tuple[float, float] | None
         Spatial spacing for Laplacian prior. Required if prior_type is "laplacian".
     temporal_spacing: float | None
         Temporal spacing for Laplacian prior. Required if prior_type is "laplacian".
@@ -1133,53 +1149,53 @@ def _compute_loss(
         Computed loss value.
     """
     # Compute motion priors
-    E_space = torch.tensor(0.0, device=deformation_field._data.device)
-    E_time = torch.tensor(0.0, device=deformation_field._data.device)
+    e_space = torch.tensor(0.0, device=deformation_field._data.device)
+    e_time = torch.tensor(0.0, device=deformation_field._data.device)
     if prior_type == "relion":
-        assert sigma_D is not None, "sigma_D is required for relion prior"
-        assert sigma_V_norm is not None, "sigma_V_norm is required for relion prior"
-        assert sigma_A_norm is not None, "sigma_A_norm is required for relion prior"
+        assert sigma_d is not None, "sigma_d is required for relion prior"
+        assert sigma_v_norm is not None, "sigma_v_norm is required for relion prior"
+        assert sigma_a_norm is not None, "sigma_a_norm is required for relion prior"
         # Convert tensor to float if needed
-        sigma_A_val = (
-            float(sigma_A_norm)
-            if isinstance(sigma_A_norm, torch.Tensor)
-            else sigma_A_norm
+        sigma_a_val = (
+            float(sigma_a_norm)
+            if isinstance(sigma_a_norm, torch.Tensor)
+            else sigma_a_norm
         )
-        E_space, E_time = relion2019_compute(
+        e_space, e_time = relion2019_compute(
             field=deformation_field._data,
             coords=image_coords,
-            sigma_D=sigma_D,
-            sigma_V=sigma_V_norm,
-            sigma_A=sigma_A_val,
+            sigma_d=sigma_d,
+            sigma_v=sigma_v_norm,
+            sigma_a=sigma_a_val,
         )
     elif prior_type == "laplacian":
-        assert sigma_A_norm is not None, "sigma_A_norm is required for laplacian prior"
+        assert sigma_a_norm is not None, "sigma_a_norm is required for laplacian prior"
         assert alpha_spatial is not None, (
             "alpha_spatial is required for laplacian prior"
         )
         # Convert tensor to float if needed
-        sigma_A_val = (
-            float(sigma_A_norm)
-            if isinstance(sigma_A_norm, torch.Tensor)
-            else sigma_A_norm
+        sigma_a_val = (
+            float(sigma_a_norm)
+            if isinstance(sigma_a_norm, torch.Tensor)
+            else sigma_a_norm
         )
-        E_space, E_time = laplacian_compute(
+        e_space, e_time = laplacian_compute(
             field=deformation_field._data,
-            sigma_A=sigma_A_val,
+            sigma_a=sigma_a_val,
             alpha=alpha_spatial,
             spatial_spacing=spatial_spacing,
             temporal_spacing=temporal_spacing,
         )
 
-    E_space = E_space * batch_size / total_n_particles
-    E_time = E_time * batch_size / total_n_particles
+    e_space = e_space * batch_size / total_n_particles
+    e_time = e_time * batch_size / total_n_particles
 
     # Compute loss for this batch (weighted by batch size for averaging)
-    E_obs = -2 * torch.mean(loss_tensor) * batch_size / total_n_particles
-    loss = E_obs + (E_space + E_time)
-    print(f"E_obs: {E_obs.item()}")
-    print(f"E_space: {E_space.item()}")
-    print(f"E_time: {E_time.item()}")
+    e_obs = -2 * torch.mean(loss_tensor) * batch_size / total_n_particles
+    loss = e_obs + (e_space + e_time)
+    print(f"e_obs: {e_obs.item()}")
+    print(f"e_space: {e_space.item()}")
+    print(f"e_time: {e_time.item()}")
     print(f"loss: {loss.item()}")
 
     return loss
@@ -1187,12 +1203,12 @@ def _compute_loss(
 
 def _setup_priors(
     prior_type: str,
-    sigma_A_exponential: bool,
-    sigma_A: float,
-    sigma_A_amplitude: float,
-    sigma_A_decay: float,
-    sigma_A_offset: float,
-    sigma_V: float,
+    sigma_a_exponential: bool,
+    sigma_a: float,
+    sigma_a_amplitude: float,
+    sigma_a_decay: float,
+    sigma_a_offset: float,
+    sigma_v: float,
     image: torch.Tensor,
     fluence_per_frame: float,
     deformation_field_resolution: tuple[int, int, int],
@@ -1205,17 +1221,20 @@ def _setup_priors(
     ----------
     prior_type: str
         Type of motion prior: "relion" or "laplacian".
-    sigma_A_exponential: bool
-        Whether to use exponential decay for sigma_A over frames.
-    sigma_A: float
+    sigma_a_exponential: bool
+        Whether to use exponential decay for sigma_a over frames.
+    sigma_a: float
         Temporal smoothness parameter.
-    sigma_A_amplitude: float
-        Amplitude A in exponential sigma_A formula: A*exp(-B*fluence) + C.
-    sigma_A_decay: float
-        Decay rate B in exponential sigma_A formula: A*exp(-B*fluence) + C.
-    sigma_A_offset: float
-        Constant offset C in exponential sigma_A formula: A*exp(-B*fluence) + C.
-    sigma_V: float
+    sigma_a_amplitude: float
+        Amplitude in exponential sigma_a formula:
+        amplitude*exp(-decay_rate*fluence) + offset.
+    sigma_a_decay: float
+        Decay rate in exponential sigma_a formula:
+        amplitude*exp(-decay_rate*fluence) + offset.
+    sigma_a_offset: float
+        Constant offset in exponential sigma_a formula:
+        amplitude*exp(-decay_rate*fluence) + offset.
+    sigma_v: float
         Velocity magnitude scale in Å per unit fluence for RELION prior.
     image: torch.Tensor
         (t, H, W) image tensor.
@@ -1238,19 +1257,19 @@ def _setup_priors(
         - spatial_spacing: Spatial spacing (only for laplacian prior)
         - temporal_spacing: Temporal spacing (only for laplacian prior)
     """
-    # Create fluence-dependent sigma_A if requested
-    if sigma_A_exponential:
+    # Create fluence-dependent sigma_a if requested
+    if sigma_a_exponential:
         total_fluence = fluence_per_frame * image.shape[0]
-        sigma_A_tensor = _create_exponential_sigma_A(
+        sigma_a_tensor = _create_exponential_sigma_a(
             total_fluence=total_fluence,
             n_frames=deformation_field_resolution[0],
-            A=sigma_A_amplitude,
-            B=sigma_A_decay,
-            C=sigma_A_offset,
+            amplitude=sigma_a_amplitude,
+            decay_rate=sigma_a_decay,
+            offset=sigma_a_offset,
             device=device,
         )
     else:
-        sigma_A_tensor = sigma_A
+        sigma_a_tensor = sigma_a
 
     if prior_type == "relion":
         image_coords = _build_physical_coords(
@@ -1261,30 +1280,30 @@ def _setup_priors(
             device=device,
         )
         # Normalize sigma parameters by fluence
-        sigma_V_norm = _normalize_sigma_fluence(
-            sigma_V,
+        sigma_v_norm = _normalize_sigma_fluence(
+            sigma_v,
             fluence_per_frame * image.shape[0],
             deformation_field_resolution[0],
         )
-        if not sigma_A_exponential:
-            sigma_A_norm = _normalize_sigma_fluence(
-                sigma_A,
+        if not sigma_a_exponential:
+            sigma_a_norm = _normalize_sigma_fluence(
+                sigma_a,
                 fluence_per_frame * image.shape[0],
                 deformation_field_resolution[0],
             )
         else:
             # Normalize the exponential tensor
-            sigma_A_norm = _normalize_sigma_fluence(
-                sigma_A_tensor,
+            sigma_a_norm = _normalize_sigma_fluence(
+                sigma_a_tensor,
                 fluence_per_frame * image.shape[0],
                 deformation_field_resolution[0],
             )
         return {
-            "sigma_A_norm": sigma_A_norm,
+            "sigma_a_norm": sigma_a_norm,
             "image_coords": image_coords,
-            "sigma_V_norm": sigma_V_norm,
+            "sigma_v_norm": sigma_v_norm,
         }
-    elif prior_type == "laplacian":
+    if prior_type == "laplacian":
         # Compute physical spacing for Laplacian prior
         spatial_spacing, temporal_spacing = _compute_physical_spacing(
             image_shape=image.shape[-2:],
@@ -1292,10 +1311,10 @@ def _setup_priors(
             grid_resolution=deformation_field_resolution,
             total_fluence=fluence_per_frame * image.shape[0],
         )
-        # For Laplacian, use sigma_A_tensor directly (no normalization needed)
-        sigma_A_norm = sigma_A_tensor
+        # For Laplacian, use sigma_a_tensor directly (no normalization needed)
+        sigma_a_norm = sigma_a_tensor
         return {
-            "sigma_A_norm": sigma_A_norm,
+            "sigma_a_norm": sigma_a_norm,
             "spatial_spacing": spatial_spacing,
             "temporal_spacing": temporal_spacing,
         }

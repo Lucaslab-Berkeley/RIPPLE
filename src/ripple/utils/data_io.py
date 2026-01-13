@@ -312,6 +312,7 @@ def load_template_volume_from_config(
     return template_volume
 
 
+# pylint: disable=too-many-arguments,too-many-positional-arguments
 def save_optimize_sigmas_to_json(
     optimized_sigmas: dict[str, Any],
     sigma_history: list[dict[str, Any]],

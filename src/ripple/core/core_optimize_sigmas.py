@@ -31,7 +31,7 @@ from .core_utils import (
 from .motion_priors import (
     _build_physical_coords,
     _compute_physical_spacing,
-    _create_exponential_sigma_A,
+    _create_exponential_sigma_a,
     _normalize_sigma_fluence,
     laplacian_compute,
     relion2019_compute,
@@ -62,21 +62,21 @@ def core_optimize_sigmas(
     min_snr: float = 0.0,
     best_n: int = 10000000000,
     prior_type: str = "relion",
-    init_sigma_A: float = 0.513517,
+    init_sigma_a: float = 0.513517,
     init_alpha_spatial: float = 1e5,
-    init_sigma_A_amplitude: float = 2.0,
-    init_sigma_A_decay: float = 0.1,
-    init_sigma_A_offset: float = 1.0,
-    sigma_A_exponential: bool = False,
-    init_sigma_D: float = 5782.376953,
-    init_sigma_V: float = 0.194826,
-    optimize_sigma_A: bool = True,
+    init_sigma_a_amplitude: float = 2.0,
+    init_sigma_a_decay: float = 0.1,
+    init_sigma_a_offset: float = 1.0,
+    sigma_a_exponential: bool = False,
+    init_sigma_d: float = 5782.376953,
+    init_sigma_v: float = 0.194826,
+    optimize_sigma_a: bool = True,
     optimize_alpha_spatial: bool = True,
-    optimize_sigma_A_amplitude: bool = True,
-    optimize_sigma_A_decay: bool = True,
-    optimize_sigma_A_offset: bool = True,
-    optimize_sigma_D: bool = True,
-    optimize_sigma_V: bool = True,
+    optimize_sigma_a_amplitude: bool = True,
+    optimize_sigma_a_decay: bool = True,
+    optimize_sigma_a_offset: bool = True,
+    optimize_sigma_d: bool = True,
+    optimize_sigma_v: bool = True,
     verbose: bool = True,
     # Output paths for saving results
     optimized_sigmas_output_path: str | None = None,
@@ -134,36 +134,36 @@ def core_optimize_sigmas(
         Maximum number of best particles to use. Default 10000000000
     prior_type : str
         "laplacian" or "relion". Default "relion"
-    init_sigma_A : float
-        Initial sigma_A (constant mode). Default 0.513517
+    init_sigma_a : float
+        Initial sigma_a (constant mode). Default 0.513517
     init_alpha_spatial : float
         Initial alpha_spatial. Default 1e5
-    init_sigma_A_amplitude : float
-        Initial A in exponential. Default 2.0
-    init_sigma_A_decay : float
-        Initial B in exponential. Default 0.1
-    init_sigma_A_offset : float
-        Initial C in exponential. Default 1.0
-    sigma_A_exponential : bool
-        Use exponential sigma_A. Default False
-    init_sigma_D : float
-        Initial sigma_D. Default 5782.376953
-    init_sigma_V : float
-        Initial sigma_V. Default 0.194826
-    optimize_sigma_A : bool
-        Whether to optimize sigma_A. Default True
+    init_sigma_a_amplitude : float
+        Initial amplitude in exponential. Default 2.0
+    init_sigma_a_decay : float
+        Initial decay rate in exponential. Default 0.1
+    init_sigma_a_offset : float
+        Initial offset in exponential. Default 1.0
+    sigma_a_exponential : bool
+        Use exponential sigma_a. Default False
+    init_sigma_d : float
+        Initial sigma_d. Default 5782.376953
+    init_sigma_v : float
+        Initial sigma_v. Default 0.194826
+    optimize_sigma_a : bool
+        Whether to optimize sigma_a. Default True
     optimize_alpha_spatial : bool
         Whether to optimize alpha_spatial. Default True
-    optimize_sigma_A_amplitude : bool
-        Whether to optimize sigma_A_amplitude. Default True
-    optimize_sigma_A_decay : bool
-        Whether to optimize sigma_A_decay. Default True
-    optimize_sigma_A_offset : bool
-        Whether to optimize sigma_A_offset. Default True
-    optimize_sigma_D : bool
-        Whether to optimize sigma_D. Default True
-    optimize_sigma_V : bool
-        Whether to optimize sigma_V. Default True
+    optimize_sigma_a_amplitude : bool
+        Whether to optimize sigma_a_amplitude. Default True
+    optimize_sigma_a_decay : bool
+        Whether to optimize sigma_a_decay. Default True
+    optimize_sigma_a_offset : bool
+        Whether to optimize sigma_a_offset. Default True
+    optimize_sigma_d : bool
+        Whether to optimize sigma_d. Default True
+    optimize_sigma_v : bool
+        Whether to optimize sigma_v. Default True
     verbose : bool
         Print progress. Default True
     optimized_sigmas_output_path : str | None
@@ -205,21 +205,21 @@ def core_optimize_sigmas(
         "min_snr": min_snr,
         "best_n": best_n,
         "prior_type": prior_type,
-        "init_sigma_A": init_sigma_A,
+        "init_sigma_a": init_sigma_a,
         "init_alpha_spatial": init_alpha_spatial,
-        "init_sigma_A_amplitude": init_sigma_A_amplitude,
-        "init_sigma_A_decay": init_sigma_A_decay,
-        "init_sigma_A_offset": init_sigma_A_offset,
-        "sigma_A_exponential": sigma_A_exponential,
-        "init_sigma_D": init_sigma_D,
-        "init_sigma_V": init_sigma_V,
-        "optimize_sigma_A": optimize_sigma_A,
+        "init_sigma_a_amplitude": init_sigma_a_amplitude,
+        "init_sigma_a_decay": init_sigma_a_decay,
+        "init_sigma_a_offset": init_sigma_a_offset,
+        "sigma_a_exponential": sigma_a_exponential,
+        "init_sigma_d": init_sigma_d,
+        "init_sigma_v": init_sigma_v,
+        "optimize_sigma_a": optimize_sigma_a,
         "optimize_alpha_spatial": optimize_alpha_spatial,
-        "optimize_sigma_A_amplitude": optimize_sigma_A_amplitude,
-        "optimize_sigma_A_decay": optimize_sigma_A_decay,
-        "optimize_sigma_A_offset": optimize_sigma_A_offset,
-        "optimize_sigma_D": optimize_sigma_D,
-        "optimize_sigma_V": optimize_sigma_V,
+        "optimize_sigma_a_amplitude": optimize_sigma_a_amplitude,
+        "optimize_sigma_a_decay": optimize_sigma_a_decay,
+        "optimize_sigma_a_offset": optimize_sigma_a_offset,
+        "optimize_sigma_d": optimize_sigma_d,
+        "optimize_sigma_v": optimize_sigma_v,
         "verbose": verbose,
         "optimized_sigmas_output_path": optimized_sigmas_output_path,
         "sigma_history_output_path": sigma_history_output_path,
@@ -232,11 +232,16 @@ def core_optimize_sigmas(
             sigma_iterations=sigma_iterations,
             **common_kwargs,
         )
-    elif optimize_algorithm == "bayesian":
+    if optimize_algorithm == "bayesian":
         return optimize_sigmas_2dtm_optuna(
             n_trials=sigma_iterations,
             **common_kwargs,
         )
+    # This should never happen due to Literal type, but satisfy type checker
+    raise ValueError(
+        f"Unknown optimize_algorithm: {optimize_algorithm}. "
+        "Must be 'nelder-mead' or 'bayesian'"
+    )
 
 
 def optimize_sigmas_2dtm_nelder_mead(
@@ -261,21 +266,21 @@ def optimize_sigmas_2dtm_nelder_mead(
     min_snr: float = 0.0,
     best_n: int = 10000000000,
     prior_type: str = "relion",
-    init_sigma_A: float = 0.513517,
+    init_sigma_a: float = 0.513517,
     init_alpha_spatial: float = 1e5,
-    init_sigma_A_amplitude: float = 2.0,
-    init_sigma_A_decay: float = 0.1,
-    init_sigma_A_offset: float = 1.0,
-    sigma_A_exponential: bool = False,
-    init_sigma_D: float = 5782.376953,
-    init_sigma_V: float = 0.194826,
-    optimize_sigma_A: bool = True,
+    init_sigma_a_amplitude: float = 2.0,
+    init_sigma_a_decay: float = 0.1,
+    init_sigma_a_offset: float = 1.0,
+    sigma_a_exponential: bool = False,
+    init_sigma_d: float = 5782.376953,
+    init_sigma_v: float = 0.194826,
+    optimize_sigma_a: bool = True,
     optimize_alpha_spatial: bool = True,
-    optimize_sigma_A_amplitude: bool = True,
-    optimize_sigma_A_decay: bool = True,
-    optimize_sigma_A_offset: bool = True,
-    optimize_sigma_D: bool = True,
-    optimize_sigma_V: bool = True,
+    optimize_sigma_a_amplitude: bool = True,
+    optimize_sigma_a_decay: bool = True,
+    optimize_sigma_a_offset: bool = True,
+    optimize_sigma_d: bool = True,
+    optimize_sigma_v: bool = True,
     verbose: bool = True,
     # Output paths for saving results
     optimized_sigmas_output_path: str | None = None,
@@ -337,36 +342,36 @@ def optimize_sigmas_2dtm_nelder_mead(
         Maximum number of best particles to use. Default 10000000000
     prior_type : str
         "laplacian" or "relion". Default "relion"
-    init_sigma_A : float
-        Initial sigma_A (constant mode). Default 0.88
+    init_sigma_a : float
+        Initial sigma_a (constant mode). Default 0.513517
     init_alpha_spatial : float
         Initial alpha_spatial. Default 1e5
-    init_sigma_A_amplitude : float
-        Initial A in exponential. Default 2.0
-    init_sigma_A_decay : float
-        Initial B in exponential. Default 0.1
-    init_sigma_A_offset : float
-        Initial C in exponential. Default 1.0
-    sigma_A_exponential : bool
-        Use exponential sigma_A. Default False
-    init_sigma_D : float
-        Initial sigma_D. Default 5080.0
-    init_sigma_V : float
-        Initial sigma_V. Default 0.58
-    optimize_sigma_A : bool
-        Whether to optimize sigma_A. Default True
+    init_sigma_a_amplitude : float
+        Initial amplitude in exponential. Default 2.0
+    init_sigma_a_decay : float
+        Initial decay rate in exponential. Default 0.1
+    init_sigma_a_offset : float
+        Initial offset in exponential. Default 1.0
+    sigma_a_exponential : bool
+        Use exponential sigma_a. Default False
+    init_sigma_d : float
+        Initial sigma_d. Default 5782.376953
+    init_sigma_v : float
+        Initial sigma_v. Default 0.194826
+    optimize_sigma_a : bool
+        Whether to optimize sigma_a. Default True
     optimize_alpha_spatial : bool
         Whether to optimize alpha_spatial. Default True
-    optimize_sigma_A_amplitude : bool
-        Whether to optimize sigma_A_amplitude. Default True
-    optimize_sigma_A_decay : bool
-        Whether to optimize sigma_A_decay. Default True
-    optimize_sigma_A_offset : bool
-        Whether to optimize sigma_A_offset. Default True
-    optimize_sigma_D : bool
-        Whether to optimize sigma_D. Default True
-    optimize_sigma_V : bool
-        Whether to optimize sigma_V. Default True
+    optimize_sigma_a_amplitude : bool
+        Whether to optimize sigma_a_amplitude. Default True
+    optimize_sigma_a_decay : bool
+        Whether to optimize sigma_a_decay. Default True
+    optimize_sigma_a_offset : bool
+        Whether to optimize sigma_a_offset. Default True
+    optimize_sigma_d : bool
+        Whether to optimize sigma_d. Default True
+    optimize_sigma_v : bool
+        Whether to optimize sigma_v. Default True
     verbose : bool
         Print progress. Default True
     optimized_sigmas_output_path : str | None
@@ -425,21 +430,21 @@ def optimize_sigmas_2dtm_nelder_mead(
         optimizer_kwargs=optimizer_kwargs,
         particle_batch_size=particle_batch_size,
         prior_type=prior_type,
-        sigma_A_exponential=sigma_A_exponential,
-        optimize_sigma_A=optimize_sigma_A,
+        sigma_a_exponential=sigma_a_exponential,
+        optimize_sigma_a=optimize_sigma_a,
         optimize_alpha_spatial=optimize_alpha_spatial,
-        optimize_sigma_A_amplitude=optimize_sigma_A_amplitude,
-        optimize_sigma_A_decay=optimize_sigma_A_decay,
-        optimize_sigma_A_offset=optimize_sigma_A_offset,
-        optimize_sigma_D=optimize_sigma_D,
-        optimize_sigma_V=optimize_sigma_V,
-        init_sigma_A=init_sigma_A,
+        optimize_sigma_a_amplitude=optimize_sigma_a_amplitude,
+        optimize_sigma_a_decay=optimize_sigma_a_decay,
+        optimize_sigma_a_offset=optimize_sigma_a_offset,
+        optimize_sigma_d=optimize_sigma_d,
+        optimize_sigma_v=optimize_sigma_v,
+        init_sigma_a=init_sigma_a,
         init_alpha_spatial=init_alpha_spatial,
-        init_sigma_A_amplitude=init_sigma_A_amplitude,
-        init_sigma_A_decay=init_sigma_A_decay,
-        init_sigma_A_offset=init_sigma_A_offset,
-        init_sigma_D=init_sigma_D,
-        init_sigma_V=init_sigma_V,
+        init_sigma_a_amplitude=init_sigma_a_amplitude,
+        init_sigma_a_decay=init_sigma_a_decay,
+        init_sigma_a_offset=init_sigma_a_offset,
+        init_sigma_d=init_sigma_d,
+        init_sigma_v=init_sigma_v,
         use_dict=False,  # Nelder-Mead uses list
         cleanup_memory=True,  # Clean up memory after batch stacks
     )
@@ -495,7 +500,7 @@ def optimize_sigmas_2dtm_nelder_mead(
             loss_metric=loss_metric,
             prior_type=prior_type,
             sigma_params=sigma_params,
-            sigma_A_exponential=sigma_A_exponential,
+            sigma_a_exponential=sigma_a_exponential,
         )
 
         # Compute validation loss
@@ -608,7 +613,7 @@ def optimize_sigmas_2dtm_nelder_mead(
             loss_metric=loss_metric,
             prior_type=prior_type,
             sigma_params=sigma_params,
-            sigma_A_exponential=sigma_A_exponential,
+            sigma_a_exponential=sigma_a_exponential,
         )
         final_deformation_field = deformation_field.data
         final_deformation_field = final_deformation_field - torch.mean(
@@ -652,7 +657,7 @@ def optimize_sigmas_2dtm_nelder_mead(
                 loss_metric=loss_metric,
                 prior_type=prior_type,
                 sigma_params=sigma_params,
-                sigma_A_exponential=sigma_A_exponential,
+                sigma_a_exponential=sigma_a_exponential,
             )
             final_deformation_field = deformation_field.data
             final_deformation_field = final_deformation_field - torch.mean(
@@ -738,21 +743,21 @@ def optimize_sigmas_2dtm_optuna(
     min_snr: float = 0.0,
     best_n: int = 10000000000,
     prior_type: str = "relion",
-    init_sigma_A: float = 0.513517,
+    init_sigma_a: float = 0.513517,
     init_alpha_spatial: float = 1e5,
-    init_sigma_A_amplitude: float = 2.0,
-    init_sigma_A_decay: float = 0.1,
-    init_sigma_A_offset: float = 1.0,
-    sigma_A_exponential: bool = False,
-    init_sigma_D: float = 5782.376953,
-    init_sigma_V: float = 0.194826,
-    optimize_sigma_A: bool = True,
+    init_sigma_a_amplitude: float = 2.0,
+    init_sigma_a_decay: float = 0.1,
+    init_sigma_a_offset: float = 1.0,
+    sigma_a_exponential: bool = False,
+    init_sigma_d: float = 5782.376953,
+    init_sigma_v: float = 0.194826,
+    optimize_sigma_a: bool = True,
     optimize_alpha_spatial: bool = True,
-    optimize_sigma_A_amplitude: bool = True,
-    optimize_sigma_A_decay: bool = True,
-    optimize_sigma_A_offset: bool = True,
-    optimize_sigma_D: bool = True,
-    optimize_sigma_V: bool = True,
+    optimize_sigma_a_amplitude: bool = True,
+    optimize_sigma_a_decay: bool = True,
+    optimize_sigma_a_offset: bool = True,
+    optimize_sigma_d: bool = True,
+    optimize_sigma_v: bool = True,
     # Optuna-specific parameters
     study_name: str | None = None,
     sampler: optuna.samplers.BaseSampler | None = None,  # Default: TPE
@@ -825,36 +830,36 @@ def optimize_sigmas_2dtm_optuna(
         Maximum number of best particles to use. Default 10000000000
     prior_type : str
         "laplacian" or "relion". Default "relion"
-    init_sigma_A : float
-        Initial sigma_A (constant mode). Default 0.88
+    init_sigma_a : float
+        Initial sigma_a (constant mode). Default 0.513517
     init_alpha_spatial : float
         Initial alpha_spatial. Default 1e5
-    init_sigma_A_amplitude : float
-        Initial A in exponential. Default 2.0
-    init_sigma_A_decay : float
-        Initial B in exponential. Default 0.1
-    init_sigma_A_offset : float
-        Initial C in exponential. Default 1.0
-    sigma_A_exponential : bool
-        Use exponential sigma_A. Default False
-    init_sigma_D : float
-        Initial sigma_D. Default 5080.0
-    init_sigma_V : float
-        Initial sigma_V. Default 0.58
-    optimize_sigma_A : bool
-        Whether to optimize sigma_A. Default True
+    init_sigma_a_amplitude : float
+        Initial amplitude in exponential. Default 2.0
+    init_sigma_a_decay : float
+        Initial decay rate in exponential. Default 0.1
+    init_sigma_a_offset : float
+        Initial offset in exponential. Default 1.0
+    sigma_a_exponential : bool
+        Use exponential sigma_a. Default False
+    init_sigma_d : float
+        Initial sigma_d. Default 5782.376953
+    init_sigma_v : float
+        Initial sigma_v. Default 0.194826
+    optimize_sigma_a : bool
+        Whether to optimize sigma_a. Default True
     optimize_alpha_spatial : bool
         Whether to optimize alpha_spatial. Default True
-    optimize_sigma_A_amplitude : bool
-        Whether to optimize sigma_A_amplitude. Default True
-    optimize_sigma_A_decay : bool
-        Whether to optimize sigma_A_decay. Default True
-    optimize_sigma_A_offset : bool
-        Whether to optimize sigma_A_offset. Default True
-    optimize_sigma_D : bool
-        Whether to optimize sigma_D. Default True
-    optimize_sigma_V : bool
-        Whether to optimize sigma_V. Default True
+    optimize_sigma_a_amplitude : bool
+        Whether to optimize sigma_a_amplitude. Default True
+    optimize_sigma_a_decay : bool
+        Whether to optimize sigma_a_decay. Default True
+    optimize_sigma_a_offset : bool
+        Whether to optimize sigma_a_offset. Default True
+    optimize_sigma_d : bool
+        Whether to optimize sigma_d. Default True
+    optimize_sigma_v : bool
+        Whether to optimize sigma_v. Default True
     study_name : str | None
         Name for Optuna study. Default None (auto-generated)
     sampler : optuna.samplers.BaseSampler | None
@@ -932,21 +937,21 @@ def optimize_sigmas_2dtm_optuna(
         optimizer_kwargs=optimizer_kwargs,
         particle_batch_size=particle_batch_size,
         prior_type=prior_type,
-        sigma_A_exponential=sigma_A_exponential,
-        optimize_sigma_A=optimize_sigma_A,
+        sigma_a_exponential=sigma_a_exponential,
+        optimize_sigma_a=optimize_sigma_a,
         optimize_alpha_spatial=optimize_alpha_spatial,
-        optimize_sigma_A_amplitude=optimize_sigma_A_amplitude,
-        optimize_sigma_A_decay=optimize_sigma_A_decay,
-        optimize_sigma_A_offset=optimize_sigma_A_offset,
-        optimize_sigma_D=optimize_sigma_D,
-        optimize_sigma_V=optimize_sigma_V,
-        init_sigma_A=init_sigma_A,
+        optimize_sigma_a_amplitude=optimize_sigma_a_amplitude,
+        optimize_sigma_a_decay=optimize_sigma_a_decay,
+        optimize_sigma_a_offset=optimize_sigma_a_offset,
+        optimize_sigma_d=optimize_sigma_d,
+        optimize_sigma_v=optimize_sigma_v,
+        init_sigma_a=init_sigma_a,
         init_alpha_spatial=init_alpha_spatial,
-        init_sigma_A_amplitude=init_sigma_A_amplitude,
-        init_sigma_A_decay=init_sigma_A_decay,
-        init_sigma_A_offset=init_sigma_A_offset,
-        init_sigma_D=init_sigma_D,
-        init_sigma_V=init_sigma_V,
+        init_sigma_a_amplitude=init_sigma_a_amplitude,
+        init_sigma_a_decay=init_sigma_a_decay,
+        init_sigma_a_offset=init_sigma_a_offset,
+        init_sigma_d=init_sigma_d,
+        init_sigma_v=init_sigma_v,
         use_dict=True,  # Optuna uses dict
         cleanup_memory=False,  # No memory cleanup needed for Optuna
     )
@@ -969,7 +974,7 @@ def optimize_sigmas_2dtm_optuna(
             initial_val = initial_values_dict[param_name]
 
             # Use log-uniform for parameters that span orders of magnitude
-            if param_name == "alpha_spatial" or param_name == "sigma_D":
+            if param_name in ("alpha_spatial", "sigma_D"):
                 # These span large ranges, use log-uniform
                 suggested_val = trial.suggest_float(
                     param_name,
@@ -1009,7 +1014,7 @@ def optimize_sigmas_2dtm_optuna(
             loss_metric=loss_metric,
             prior_type=prior_type,
             sigma_params=sigma_params,
-            sigma_A_exponential=sigma_A_exponential,
+            sigma_a_exponential=sigma_a_exponential,
         )
 
         # Compute validation loss
@@ -1109,7 +1114,7 @@ def optimize_sigmas_2dtm_optuna(
             loss_metric=loss_metric,
             prior_type=prior_type,
             sigma_params=sigma_params,
-            sigma_A_exponential=sigma_A_exponential,
+            sigma_a_exponential=sigma_a_exponential,
         )
         final_deformation_field = deformation_field.data
         final_deformation_field = final_deformation_field - torch.mean(
@@ -1273,21 +1278,21 @@ def _compute_validation_loss_common(
 
 def _collect_sigma_parameters(
     prior_type: str,
-    sigma_A_exponential: bool,
-    optimize_sigma_A: bool,
+    sigma_a_exponential: bool,
+    optimize_sigma_a: bool,
     optimize_alpha_spatial: bool,
-    optimize_sigma_A_amplitude: bool,
-    optimize_sigma_A_decay: bool,
-    optimize_sigma_A_offset: bool,
-    optimize_sigma_D: bool,
-    optimize_sigma_V: bool,
-    init_sigma_A: float,
+    optimize_sigma_a_amplitude: bool,
+    optimize_sigma_a_decay: bool,
+    optimize_sigma_a_offset: bool,
+    optimize_sigma_d: bool,
+    optimize_sigma_v: bool,
+    init_sigma_a: float,
     init_alpha_spatial: float,
-    init_sigma_A_amplitude: float,
-    init_sigma_A_decay: float,
-    init_sigma_A_offset: float,
-    init_sigma_D: float,
-    init_sigma_V: float,
+    init_sigma_a_amplitude: float,
+    init_sigma_a_decay: float,
+    init_sigma_a_offset: float,
+    init_sigma_d: float,
+    init_sigma_v: float,
     use_dict: bool = False,  # True for optuna (dict), False for nelder-mead (list)
 ) -> tuple[
     list[str],  # param_names
@@ -1300,36 +1305,36 @@ def _collect_sigma_parameters(
     ----------
     prior_type : str
         Prior type ("laplacian" or "relion")
-    sigma_A_exponential : bool
-        Whether to use exponential sigma_A
-    optimize_sigma_A : bool
-        Whether to optimize sigma_A
+    sigma_a_exponential : bool
+        Whether to use exponential sigma_a
+    optimize_sigma_a : bool
+        Whether to optimize sigma_a
     optimize_alpha_spatial : bool
         Whether to optimize alpha_spatial
-    optimize_sigma_A_amplitude : bool
-        Whether to optimize sigma_A_amplitude
-    optimize_sigma_A_decay : bool
-        Whether to optimize sigma_A_decay
-    optimize_sigma_A_offset : bool
-        Whether to optimize sigma_A_offset
-    optimize_sigma_D : bool
-        Whether to optimize sigma_D
-    optimize_sigma_V : bool
-        Whether to optimize sigma_V
-    init_sigma_A : float
-        Initial sigma_A value
+    optimize_sigma_a_amplitude : bool
+        Whether to optimize sigma_a_amplitude
+    optimize_sigma_a_decay : bool
+        Whether to optimize sigma_a_decay
+    optimize_sigma_a_offset : bool
+        Whether to optimize sigma_a_offset
+    optimize_sigma_d : bool
+        Whether to optimize sigma_d
+    optimize_sigma_v : bool
+        Whether to optimize sigma_v
+    init_sigma_a : float
+        Initial sigma_a value
     init_alpha_spatial : float
         Initial alpha_spatial value
-    init_sigma_A_amplitude : float
-        Initial sigma_A_amplitude value
-    init_sigma_A_decay : float
-        Initial sigma_A_decay value
-    init_sigma_A_offset : float
-        Initial sigma_A_offset value
-    init_sigma_D : float
-        Initial sigma_D value
-    init_sigma_V : float
-        Initial sigma_V value
+    init_sigma_a_amplitude : float
+        Initial sigma_a_amplitude value
+    init_sigma_a_decay : float
+        Initial sigma_a_decay value
+    init_sigma_a_offset : float
+        Initial sigma_a_offset value
+    init_sigma_d : float
+        Initial sigma_d value
+    init_sigma_v : float
+        Initial sigma_v value
     use_dict : bool
         If True, return initial_values as dict (for optuna).
         If False, return as list (for nelder-mead). Default False.
@@ -1349,46 +1354,46 @@ def _collect_sigma_parameters(
     sigma_params: dict[str, float] = {}
 
     # Collect parameters to optimize
-    if sigma_A_exponential:
-        if optimize_sigma_A_amplitude:
-            param_names.append("sigma_A_amplitude")
+    if sigma_a_exponential:
+        if optimize_sigma_a_amplitude:
+            param_names.append("sigma_a_amplitude")
             if use_dict:
-                initial_values_dict["sigma_A_amplitude"] = init_sigma_A_amplitude
+                initial_values_dict["sigma_a_amplitude"] = init_sigma_a_amplitude
             else:
-                initial_values_list.append(init_sigma_A_amplitude)
-            sigma_params["sigma_A_amplitude"] = init_sigma_A_amplitude
+                initial_values_list.append(init_sigma_a_amplitude)
+            sigma_params["sigma_a_amplitude"] = init_sigma_a_amplitude
         else:
-            sigma_params["sigma_A_amplitude"] = init_sigma_A_amplitude
+            sigma_params["sigma_a_amplitude"] = init_sigma_a_amplitude
 
-        if optimize_sigma_A_decay:
-            param_names.append("sigma_A_decay")
+        if optimize_sigma_a_decay:
+            param_names.append("sigma_a_decay")
             if use_dict:
-                initial_values_dict["sigma_A_decay"] = init_sigma_A_decay
+                initial_values_dict["sigma_a_decay"] = init_sigma_a_decay
             else:
-                initial_values_list.append(init_sigma_A_decay)
-            sigma_params["sigma_A_decay"] = init_sigma_A_decay
+                initial_values_list.append(init_sigma_a_decay)
+            sigma_params["sigma_a_decay"] = init_sigma_a_decay
         else:
-            sigma_params["sigma_A_decay"] = init_sigma_A_decay
+            sigma_params["sigma_a_decay"] = init_sigma_a_decay
 
-        if optimize_sigma_A_offset:
-            param_names.append("sigma_A_offset")
+        if optimize_sigma_a_offset:
+            param_names.append("sigma_a_offset")
             if use_dict:
-                initial_values_dict["sigma_A_offset"] = init_sigma_A_offset
+                initial_values_dict["sigma_a_offset"] = init_sigma_a_offset
             else:
-                initial_values_list.append(init_sigma_A_offset)
-            sigma_params["sigma_A_offset"] = init_sigma_A_offset
+                initial_values_list.append(init_sigma_a_offset)
+            sigma_params["sigma_a_offset"] = init_sigma_a_offset
         else:
-            sigma_params["sigma_A_offset"] = init_sigma_A_offset
+            sigma_params["sigma_a_offset"] = init_sigma_a_offset
     else:
-        if optimize_sigma_A:
-            param_names.append("sigma_A")
+        if optimize_sigma_a:
+            param_names.append("sigma_a")
             if use_dict:
-                initial_values_dict["sigma_A"] = init_sigma_A
+                initial_values_dict["sigma_a"] = init_sigma_a
             else:
-                initial_values_list.append(init_sigma_A)
-            sigma_params["sigma_A"] = init_sigma_A
+                initial_values_list.append(init_sigma_a)
+            sigma_params["sigma_a"] = init_sigma_a
         else:
-            sigma_params["sigma_A"] = init_sigma_A
+            sigma_params["sigma_a"] = init_sigma_a
 
     if prior_type == "laplacian" and optimize_alpha_spatial:
         param_names.append("alpha_spatial")
@@ -1401,25 +1406,25 @@ def _collect_sigma_parameters(
         sigma_params["alpha_spatial"] = init_alpha_spatial
 
     if prior_type == "relion":
-        if optimize_sigma_D:
-            param_names.append("sigma_D")
+        if optimize_sigma_d:
+            param_names.append("sigma_d")
             if use_dict:
-                initial_values_dict["sigma_D"] = init_sigma_D
+                initial_values_dict["sigma_d"] = init_sigma_d
             else:
-                initial_values_list.append(init_sigma_D)
-            sigma_params["sigma_D"] = init_sigma_D
+                initial_values_list.append(init_sigma_d)
+            sigma_params["sigma_d"] = init_sigma_d
         else:
-            sigma_params["sigma_D"] = init_sigma_D
+            sigma_params["sigma_d"] = init_sigma_d
 
-        if optimize_sigma_V:
-            param_names.append("sigma_V")
+        if optimize_sigma_v:
+            param_names.append("sigma_v")
             if use_dict:
-                initial_values_dict["sigma_V"] = init_sigma_V
+                initial_values_dict["sigma_v"] = init_sigma_v
             else:
-                initial_values_list.append(init_sigma_V)
-            sigma_params["sigma_V"] = init_sigma_V
+                initial_values_list.append(init_sigma_v)
+            sigma_params["sigma_v"] = init_sigma_v
         else:
-            sigma_params["sigma_V"] = init_sigma_V
+            sigma_params["sigma_v"] = init_sigma_v
 
     if len(param_names) == 0:
         raise ValueError("No sigma parameters selected for optimization!")
@@ -1434,7 +1439,7 @@ def _collect_sigma_parameters(
 # pylint: disable=too-many-arguments,too-many-locals
 def _setup_prior_params(
     prior_type: str,
-    sigma_A_exponential: bool,
+    sigma_a_exponential: bool,
     sigma_params: dict[str, Any],
     image: torch.Tensor,
     pixel_spacing: float,
@@ -1448,7 +1453,7 @@ def _setup_prior_params(
     ----------
     prior_type : str
         "laplacian" or "relion"
-    sigma_A_exponential : bool
+    sigma_a_exponential : bool
         Whether to use exponential sigma_A
     sigma_params : dict[str, Any]
         Dictionary of sigma parameters (values can be float or torch.Tensor)
@@ -1488,29 +1493,35 @@ def _setup_prior_params(
         prior_params["spatial_spacing"] = spatial_spacing
         prior_params["temporal_spacing"] = temporal_spacing
 
-        if sigma_A_exponential:
-            A = get_val("sigma_A_amplitude")
-            B = get_val("sigma_A_decay")
-            C = get_val("sigma_A_offset")
-            A = A.item() if isinstance(A, torch.Tensor) else A
-            B = B.item() if isinstance(B, torch.Tensor) else B
-            C = C.item() if isinstance(C, torch.Tensor) else C
-            sigma_A_tensor = _create_exponential_sigma_A(
+        if sigma_a_exponential:
+            amplitude = get_val("sigma_a_amplitude")
+            decay_rate = get_val("sigma_a_decay")
+            offset = get_val("sigma_a_offset")
+            amplitude = (
+                amplitude.item() if isinstance(amplitude, torch.Tensor) else amplitude
+            )
+            decay_rate = (
+                decay_rate.item()
+                if isinstance(decay_rate, torch.Tensor)
+                else decay_rate
+            )
+            offset = offset.item() if isinstance(offset, torch.Tensor) else offset
+            sigma_a_tensor = _create_exponential_sigma_a(
                 fluence_per_frame * image.shape[0],
                 deformation_field_resolution[0],
-                A=A,
-                B=B,
-                C=C,
+                amplitude=amplitude,
+                decay_rate=decay_rate,
+                offset=offset,
                 device=device,
             )
         else:
-            sigma_A_tensor = get_val("sigma_A")
-            sigma_A_tensor = (
-                sigma_A_tensor.item()
-                if isinstance(sigma_A_tensor, torch.Tensor)
-                else sigma_A_tensor
+            sigma_a_tensor = get_val("sigma_a")
+            sigma_a_tensor = (
+                sigma_a_tensor.item()
+                if isinstance(sigma_a_tensor, torch.Tensor)
+                else sigma_a_tensor
             )
-        prior_params["sigma_A_tensor"] = sigma_A_tensor
+        prior_params["sigma_a_tensor"] = sigma_a_tensor
 
         alpha = get_val("alpha_spatial")
         alpha = alpha.item() if isinstance(alpha, torch.Tensor) else alpha
@@ -1526,52 +1537,58 @@ def _setup_prior_params(
         )
         prior_params["image_coords"] = image_coords
 
-        sigma_D_val = get_val("sigma_D")
-        sigma_D_val = (
-            sigma_D_val.item() if isinstance(sigma_D_val, torch.Tensor) else sigma_D_val
+        sigma_d_val = get_val("sigma_d")
+        sigma_d_val = (
+            sigma_d_val.item() if isinstance(sigma_d_val, torch.Tensor) else sigma_d_val
         )
-        prior_params["sigma_D_val"] = sigma_D_val
+        prior_params["sigma_d_val"] = sigma_d_val
 
-        sigma_V_val = get_val("sigma_V")
-        sigma_V_val = (
-            sigma_V_val.item() if isinstance(sigma_V_val, torch.Tensor) else sigma_V_val
+        sigma_v_val = get_val("sigma_v")
+        sigma_v_val = (
+            sigma_v_val.item() if isinstance(sigma_v_val, torch.Tensor) else sigma_v_val
         )
-        sigma_V_norm = _normalize_sigma_fluence(
-            sigma_V_val,
+        sigma_v_norm = _normalize_sigma_fluence(
+            sigma_v_val,
             fluence_per_frame * image.shape[0],
             deformation_field_resolution[0],
         )
-        prior_params["sigma_V_norm"] = sigma_V_norm
+        prior_params["sigma_v_norm"] = sigma_v_norm
 
-        if sigma_A_exponential:
-            A = get_val("sigma_A_amplitude")
-            B = get_val("sigma_A_decay")
-            C = get_val("sigma_A_offset")
-            A = A.item() if isinstance(A, torch.Tensor) else A
-            B = B.item() if isinstance(B, torch.Tensor) else B
-            C = C.item() if isinstance(C, torch.Tensor) else C
-            sigma_A_tensor = _create_exponential_sigma_A(
+        if sigma_a_exponential:
+            amplitude = get_val("sigma_a_amplitude")
+            decay_rate = get_val("sigma_a_decay")
+            offset = get_val("sigma_a_offset")
+            amplitude = (
+                amplitude.item() if isinstance(amplitude, torch.Tensor) else amplitude
+            )
+            decay_rate = (
+                decay_rate.item()
+                if isinstance(decay_rate, torch.Tensor)
+                else decay_rate
+            )
+            offset = offset.item() if isinstance(offset, torch.Tensor) else offset
+            sigma_a_tensor = _create_exponential_sigma_a(
                 fluence_per_frame * image.shape[0],
                 deformation_field_resolution[0],
-                A=A,
-                B=B,
-                C=C,
+                amplitude=amplitude,
+                decay_rate=decay_rate,
+                offset=offset,
                 device=device,
             )
-            sigma_A_norm = _normalize_sigma_fluence(
-                sigma_A_tensor,
+            sigma_a_norm = _normalize_sigma_fluence(
+                sigma_a_tensor,
                 fluence_per_frame * image.shape[0],
                 deformation_field_resolution[0],
             )
         else:
-            sa = get_val("sigma_A")
+            sa = get_val("sigma_a")
             sa = sa.item() if isinstance(sa, torch.Tensor) else sa
-            sigma_A_norm = _normalize_sigma_fluence(
+            sigma_a_norm = _normalize_sigma_fluence(
                 sa,
                 fluence_per_frame * image.shape[0],
                 deformation_field_resolution[0],
             )
-        prior_params["sigma_A_norm"] = sigma_A_norm
+        prior_params["sigma_a_norm"] = sigma_a_norm
 
     return prior_params
 
@@ -1592,21 +1609,21 @@ def _setup_optimizer(
     optimizer_kwargs: dict[str, Any] | None,
     particle_batch_size: int,
     prior_type: str,
-    sigma_A_exponential: bool,
-    optimize_sigma_A: bool,
+    sigma_a_exponential: bool,
+    optimize_sigma_a: bool,
     optimize_alpha_spatial: bool,
-    optimize_sigma_A_amplitude: bool,
-    optimize_sigma_A_decay: bool,
-    optimize_sigma_A_offset: bool,
-    optimize_sigma_D: bool,
-    optimize_sigma_V: bool,
-    init_sigma_A: float,
+    optimize_sigma_a_amplitude: bool,
+    optimize_sigma_a_decay: bool,
+    optimize_sigma_a_offset: bool,
+    optimize_sigma_d: bool,
+    optimize_sigma_v: bool,
+    init_sigma_a: float,
     init_alpha_spatial: float,
-    init_sigma_A_amplitude: float,
-    init_sigma_A_decay: float,
-    init_sigma_A_offset: float,
-    init_sigma_D: float,
-    init_sigma_V: float,
+    init_sigma_a_amplitude: float,
+    init_sigma_a_decay: float,
+    init_sigma_a_offset: float,
+    init_sigma_d: float,
+    init_sigma_v: float,
     use_dict: bool,
     cleanup_memory: bool = False,
 ) -> tuple[
@@ -1659,36 +1676,36 @@ def _setup_optimizer(
         Batch size for particles
     prior_type : str
         "laplacian" or "relion"
-    sigma_A_exponential : bool
-        Use exponential sigma_A
-    optimize_sigma_A : bool
-        Whether to optimize sigma_A
+    sigma_a_exponential : bool
+        Use exponential sigma_a
+    optimize_sigma_a : bool
+        Whether to optimize sigma_a
     optimize_alpha_spatial : bool
         Whether to optimize alpha_spatial
-    optimize_sigma_A_amplitude : bool
-        Whether to optimize sigma_A_amplitude
-    optimize_sigma_A_decay : bool
-        Whether to optimize sigma_A_decay
-    optimize_sigma_A_offset : bool
-        Whether to optimize sigma_A_offset
-    optimize_sigma_D : bool
-        Whether to optimize sigma_D
-    optimize_sigma_V : bool
-        Whether to optimize sigma_V
-    init_sigma_A : float
-        Initial sigma_A value
+    optimize_sigma_a_amplitude : bool
+        Whether to optimize sigma_a_amplitude
+    optimize_sigma_a_decay : bool
+        Whether to optimize sigma_a_decay
+    optimize_sigma_a_offset : bool
+        Whether to optimize sigma_a_offset
+    optimize_sigma_d : bool
+        Whether to optimize sigma_d
+    optimize_sigma_v : bool
+        Whether to optimize sigma_v
+    init_sigma_a : float
+        Initial sigma_a value
     init_alpha_spatial : float
         Initial alpha_spatial value
-    init_sigma_A_amplitude : float
-        Initial sigma_A_amplitude value
-    init_sigma_A_decay : float
-        Initial sigma_A_decay value
-    init_sigma_A_offset : float
-        Initial sigma_A_offset value
-    init_sigma_D : float
-        Initial sigma_D value
-    init_sigma_V : float
-        Initial sigma_V value
+    init_sigma_a_amplitude : float
+        Initial sigma_a_amplitude value
+    init_sigma_a_decay : float
+        Initial sigma_a_decay value
+    init_sigma_a_offset : float
+        Initial sigma_a_offset value
+    init_sigma_d : float
+        Initial sigma_d value
+    init_sigma_v : float
+        Initial sigma_v value
     use_dict : bool
         If True, return initial_values as dict (for optuna).
         If False, return as list (for nelder-mead).
@@ -1744,21 +1761,21 @@ def _setup_optimizer(
     # Build parameter list and initial values
     param_names, initial_values, sigma_params = _collect_sigma_parameters(
         prior_type=prior_type,
-        sigma_A_exponential=sigma_A_exponential,
-        optimize_sigma_A=optimize_sigma_A,
+        sigma_a_exponential=sigma_a_exponential,
+        optimize_sigma_a=optimize_sigma_a,
         optimize_alpha_spatial=optimize_alpha_spatial,
-        optimize_sigma_A_amplitude=optimize_sigma_A_amplitude,
-        optimize_sigma_A_decay=optimize_sigma_A_decay,
-        optimize_sigma_A_offset=optimize_sigma_A_offset,
-        optimize_sigma_D=optimize_sigma_D,
-        optimize_sigma_V=optimize_sigma_V,
-        init_sigma_A=init_sigma_A,
+        optimize_sigma_a_amplitude=optimize_sigma_a_amplitude,
+        optimize_sigma_a_decay=optimize_sigma_a_decay,
+        optimize_sigma_a_offset=optimize_sigma_a_offset,
+        optimize_sigma_d=optimize_sigma_d,
+        optimize_sigma_v=optimize_sigma_v,
+        init_sigma_a=init_sigma_a,
         init_alpha_spatial=init_alpha_spatial,
-        init_sigma_A_amplitude=init_sigma_A_amplitude,
-        init_sigma_A_decay=init_sigma_A_decay,
-        init_sigma_A_offset=init_sigma_A_offset,
-        init_sigma_D=init_sigma_D,
-        init_sigma_V=init_sigma_V,
+        init_sigma_a_amplitude=init_sigma_a_amplitude,
+        init_sigma_a_decay=init_sigma_a_decay,
+        init_sigma_a_offset=init_sigma_a_offset,
+        init_sigma_d=init_sigma_d,
+        init_sigma_v=init_sigma_v,
         use_dict=use_dict,
     )
 
@@ -1821,7 +1838,7 @@ def _run_inner_optimization_common(
     loss_metric: str,
     prior_type: str,
     sigma_params: dict[str, Any],
-    sigma_A_exponential: bool,
+    sigma_a_exponential: bool,
 ) -> tuple[CubicCatmullRomGrid3d, float]:
     """Run inner motion optimization loop with current sigma parameters.
 
@@ -1865,7 +1882,7 @@ def _run_inner_optimization_common(
         Prior type ("laplacian" or "relion")
     sigma_params : dict[str, Any]
         Dictionary of sigma parameters (values can be float or torch.Tensor)
-    sigma_A_exponential : bool
+    sigma_a_exponential : bool
         Whether to use exponential sigma_A
 
     Returns
@@ -1873,12 +1890,6 @@ def _run_inner_optimization_common(
     tuple[CubicCatmullRomGrid3d, float]
         Tuple of (deformation_field, accumulated_loss)
     """
-
-    def get_val(key: str) -> Any:
-        """Get parameter value, handling both dict and tensor cases."""
-        v = sigma_params.get(key)
-        return abs(v) if isinstance(v, int | float) else v
-
     # Initialize deformation field
     if initial_deformation_field is None:
         deformation_field_data = torch.zeros(
@@ -1904,7 +1915,7 @@ def _run_inner_optimization_common(
     # Setup prior params
     prior_params = _setup_prior_params(
         prior_type=prior_type,
-        sigma_A_exponential=sigma_A_exponential,
+        sigma_a_exponential=sigma_a_exponential,
         sigma_params=sigma_params,
         image=image,
         pixel_spacing=pixel_spacing,
@@ -1962,28 +1973,28 @@ def _run_inner_optimization_common(
             )
 
             if prior_type == "laplacian":
-                E_space, E_time = laplacian_compute(
+                e_space, e_time = laplacian_compute(
                     deformation_field._data,
-                    prior_params["sigma_A_tensor"],
+                    prior_params["sigma_a_tensor"],
                     prior_params["alpha"],
                     prior_params["spatial_spacing"],
                     prior_params["temporal_spacing"],
                 )
             else:
-                E_space, E_time = relion2019_compute(
+                e_space, e_time = relion2019_compute(
                     deformation_field._data,
                     prior_params["image_coords"],
-                    prior_params["sigma_D_val"],
-                    prior_params["sigma_V_norm"],
-                    prior_params["sigma_A_norm"],
+                    prior_params["sigma_d_val"],
+                    prior_params["sigma_v_norm"],
+                    prior_params["sigma_a_norm"],
                 )
 
             weight = batch_size / total_n_particles
-            E_space = E_space * weight
-            E_time = E_time * weight
-            E_obs = -2 * torch.mean(loss_tensor) * weight
+            e_space = e_space * weight
+            e_time = e_time * weight
+            e_obs = -2 * torch.mean(loss_tensor) * weight
 
-            batch_loss = E_obs + E_space + E_time
+            batch_loss = e_obs + e_space + e_time
             batch_accumulated_loss += batch_loss.item()
             batch_loss.backward()
 
@@ -1996,9 +2007,9 @@ def _run_inner_optimization_common(
                 result,
                 loss_tensor,
                 batch_loss,
-                E_obs,
-                E_space,
-                E_time,
+                e_obs,
+                e_space,
+                e_time,
             )
             del batch_refine_manager, batch_particle_stack
 

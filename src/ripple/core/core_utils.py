@@ -79,6 +79,7 @@ def get_batch_mean_std_stacks(
     return batch_mean_stacks, batch_std_stacks
 
 
+# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
 def _filter_particles_by_quality(
     refine_config_path: str,
     particle_indices: list[pd.Index] | None,

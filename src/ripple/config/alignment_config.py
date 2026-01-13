@@ -147,14 +147,14 @@ class PriorConfig(BaseModelRIPPLE):
     """
 
     prior_type: str = "relion"
-    sigma_A_exponential: bool = False
-    init_sigma_A: float = 0.513517
+    sigma_a_exponential: bool = False
+    init_sigma_a: float = 0.513517
     init_alpha_spatial: float = 1e5
-    init_sigma_D: float = 5782.376953
-    init_sigma_V: float = 0.194826
-    init_sigma_A_amplitude: float = 2.0
-    init_sigma_A_decay: float = 0.1
-    init_sigma_A_offset: float = 1.0
+    init_sigma_d: float = 5782.376953
+    init_sigma_v: float = 0.194826
+    init_sigma_a_amplitude: float = 2.0
+    init_sigma_a_decay: float = 0.1
+    init_sigma_a_offset: float = 1.0
 
 
 class OptimizationConfig(BaseModelRIPPLE):

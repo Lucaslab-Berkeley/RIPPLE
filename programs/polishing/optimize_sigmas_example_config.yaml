@@ -109,29 +109,29 @@ alignment_config:
     # Type of prior to use: "relion" or "laplacian" (default: "relion")
     prior_type: "relion"
     
-    # Whether to use exponential decay for sigma_A over frames (default: false)
-    sigma_A_exponential: true
+    # Whether to use exponential decay for sigma_a over frames (default: false)
+    sigma_a_exponential: true
     
-    # Initial sigma_A (temporal smoothness) for constant mode (default: 0.513517)
-    init_sigma_A: 0.45262779342421533
+    # Initial sigma_a (temporal smoothness) for constant mode (default: 0.513517)
+    init_sigma_a: 0.45262779342421533
     
     # Initial alpha_spatial (spatial smoothness strength for Laplacian prior) (default: 1e5)
     init_alpha_spatial: 1e5
     
-    # Initial sigma_D (spatial correlation length in Angstroms for RELION prior) (default: 5782.376953)
-    init_sigma_D: 8391.603615290209
+    # Initial sigma_d (spatial correlation length in Angstroms for RELION prior) (default: 5782.376953)
+    init_sigma_d: 8391.603615290209
     
-    # Initial sigma_V (velocity magnitude scale in Å per unit fluence for RELION prior) (default: 0.194826)
-    init_sigma_V: 0.2901410729361167
+    # Initial sigma_v (velocity magnitude scale in Å per unit fluence for RELION prior) (default: 0.194826)
+    init_sigma_v: 0.2901410729361167
     
-    # Initial amplitude A in exponential sigma_A formula: A*exp(-B*fluence) + C (default: 2.0)
-    init_sigma_A_amplitude: 2.0
+    # Initial amplitude A in exponential sigma_a formula: A*exp(-B*fluence) + C (default: 2.0)
+    init_sigma_a_amplitude: 2.0
     
-    # Initial decay rate B in exponential sigma_A formula: A*exp(-B*fluence) + C (default: 0.1)
-    init_sigma_A_decay: 0.1
+    # Initial decay rate B in exponential sigma_a formula: A*exp(-B*fluence) + C (default: 0.1)
+    init_sigma_a_decay: 0.1
     
-    # Initial constant offset C in exponential sigma_A formula: A*exp(-B*fluence) + C (default: 1.0)
-    init_sigma_A_offset: 1.0
+    # Initial constant offset C in exponential sigma_a formula: A*exp(-B*fluence) + C (default: 1.0)
+    init_sigma_a_offset: 1.0
 
   # Sigma optimization configuration (optional)
   # If provided, sigma hyperparameters will be optimized using a validation template

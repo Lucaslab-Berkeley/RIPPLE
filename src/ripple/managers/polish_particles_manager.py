@@ -89,18 +89,18 @@ class PolishParticlesManager(BaseModelRIPPLE):
             "min_snr": self.alignment_config.min_snr,
             "best_n": self.alignment_config.best_n,
             "prior_type": self.alignment_config.prior_config.prior_type,
-            "sigma_D": self.alignment_config.prior_config.init_sigma_D,
-            "sigma_V": self.alignment_config.prior_config.init_sigma_V,
-            "sigma_A": self.alignment_config.prior_config.init_sigma_A,
+            "sigma_d": self.alignment_config.prior_config.init_sigma_d,
+            "sigma_v": self.alignment_config.prior_config.init_sigma_v,
+            "sigma_a": self.alignment_config.prior_config.init_sigma_a,
             "alpha_spatial": self.alignment_config.prior_config.init_alpha_spatial,
-            "sigma_A_exponential": (
-                self.alignment_config.prior_config.sigma_A_exponential
+            "sigma_a_exponential": (
+                self.alignment_config.prior_config.sigma_a_exponential
             ),
-            "sigma_A_amplitude": (
-                self.alignment_config.prior_config.init_sigma_A_amplitude
+            "sigma_a_amplitude": (
+                self.alignment_config.prior_config.init_sigma_a_amplitude
             ),
-            "sigma_A_decay": self.alignment_config.prior_config.init_sigma_A_decay,
-            "sigma_A_offset": self.alignment_config.prior_config.init_sigma_A_offset,
+            "sigma_a_decay": self.alignment_config.prior_config.init_sigma_a_decay,
+            "sigma_a_offset": self.alignment_config.prior_config.init_sigma_a_offset,
         }
         return backend_kwargs
 
@@ -190,14 +190,14 @@ class PolishParticlesManager(BaseModelRIPPLE):
                 loss_metric=core_kwargs["loss_metric"],
                 min_snr=core_kwargs["min_snr"],
                 best_n=core_kwargs["best_n"],
-                init_sigma_A=self.alignment_config.prior_config.init_sigma_A,
+                init_sigma_a=self.alignment_config.prior_config.init_sigma_a,
                 init_alpha_spatial=self.alignment_config.prior_config.init_alpha_spatial,
-                init_sigma_A_amplitude=self.alignment_config.prior_config.init_sigma_A_amplitude,
-                init_sigma_A_decay=self.alignment_config.prior_config.init_sigma_A_decay,
-                init_sigma_A_offset=self.alignment_config.prior_config.init_sigma_A_offset,
-                sigma_A_exponential=self.alignment_config.prior_config.sigma_A_exponential,
-                init_sigma_D=self.alignment_config.prior_config.init_sigma_D,
-                init_sigma_V=self.alignment_config.prior_config.init_sigma_V,
+                init_sigma_a_amplitude=self.alignment_config.prior_config.init_sigma_a_amplitude,
+                init_sigma_a_decay=self.alignment_config.prior_config.init_sigma_a_decay,
+                init_sigma_a_offset=self.alignment_config.prior_config.init_sigma_a_offset,
+                sigma_a_exponential=self.alignment_config.prior_config.sigma_a_exponential,
+                init_sigma_d=self.alignment_config.prior_config.init_sigma_d,
+                init_sigma_v=self.alignment_config.prior_config.init_sigma_v,
                 optimized_sigmas_output_path=opt_config.optimized_sigmas_output_path,
                 sigma_history_output_path=opt_config.sigma_history_output_path,
                 training_history_output_path=opt_config.training_history_output_path,
