@@ -174,7 +174,9 @@ class PolishParticlesManager(BaseModelRIPPLE):
                 var_image=core_kwargs["var_image"],
                 mean_image=core_kwargs["mean_image"],
                 pixel_spacing=core_kwargs["pixel_size"],
-                deformation_field_resolution=core_kwargs["deformation_field_resolution"],
+                deformation_field_resolution=core_kwargs[
+                    "deformation_field_resolution"
+                ],
                 initial_deformation_field=core_kwargs["initial_deformation_field"],
                 refine_config_path=core_kwargs["refine_config_path"],
                 validation_template_path=opt_config.validation_template_path,

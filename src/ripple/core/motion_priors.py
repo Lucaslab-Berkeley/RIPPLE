@@ -1,52 +1,137 @@
-# motion_priors.py
-#
-# Implements:
-#   1. RELION 2019 Zivanov prior (exact GP with exponential kernel)
-#   2. Separable Gaussian GP prior (fast Kronecker approximation)
-#   3. Laplacian spatial smoothness
-#
-# All produce E_space and E_time compatible with eqs. (2)–(11)
-# for a deformation field: field shape = (2, nt, nh, nw)
-#
-# Field is absolute shifts s[f,y,x] in Å or pixels.
+"""Motion priors for deformation field regularization.
+
+This module implements several motion prior models for regularizing deformation
+fields in cryo-EM movie alignment:
+
+1. RELION 2019 Zivanov prior: Exact Gaussian process with exponential kernel
+2. Separable Gaussian GP prior: Fast Kronecker approximation
+3. Laplacian spatial smoothness: Simple spatial and temporal smoothness constraints
+
+All implementations produce E_space and E_time energy terms compatible with
+equations (2)-(11) for a deformation field with shape (2, nt, nh, nw).
+
+The deformation field represents absolute shifts s[f,y,x] in Angstroms or pixels,
+where:
+    - First dimension (2): y and x components
+    - Second dimension (nt): Number of time frames
+    - Third dimension (nh): Number of control points in height
+    - Fourth dimension (nw): Number of control points in width
+"""
 
 import torch
-import torch.nn.functional as F
-import math
 
 
 # --------------------------------------------------------------------------
 # Utilities
 # --------------------------------------------------------------------------
-def _pairwise_dist_matrix(coords):
+def _pairwise_dist_matrix(coords: torch.Tensor) -> torch.Tensor:
     """
-    coords: (P, 2)
-    returns dists: (P, P)
+    Builds a pairwise distance matrix between coordinates.
+
+    Parameters
+    ----------
+    coords : torch.Tensor
+        (P, 2) coordinates of control points
+
+    Returns
+    -------
+    dist : torch.Tensor
+        (P, P) pairwise distance matrix
     """
     diff = coords.unsqueeze(1) - coords.unsqueeze(0)  # (P, P, 2)
     dist = torch.sqrt(torch.sum(diff * diff, dim=-1) + 1e-12)
     return dist
 
 
-def _build_exponential_kernel(coords, sigma_D, sigma_V):
+def _build_exponential_kernel(
+    coords: torch.Tensor,
+    sigma_D: float,
+    sigma_V: float,
+) -> torch.Tensor:
     """
-    coords: (P,2)
+    Builds an exponential kernel between coordinates.
+
+    Parameters
+    ----------
+    coords : torch.Tensor
+        (P, 2) coordinates of control points
+    sigma_D : float
+        Spatial correlation length
+    sigma_V : float
+        Velocity magnitude scale
+
+    Returns
+    -------
+    K : torch.Tensor
+        (P, P) exponential kernel matrix
+
+    Notes
+    -----
     Sigma_V(p,q) = sigma_V * exp(-||p-q|| / sigma_D)
     """
     dist = _pairwise_dist_matrix(coords)  # (P,P)
-    K = sigma_V*sigma_V * torch.exp(-dist / sigma_D)
+    K = sigma_V * sigma_V * torch.exp(-dist / sigma_D)
     return K
 
 
-def _build_gaussian_kernel_1d(grid, sigma_space, sigma_strength):
+def _build_gaussian_kernel_1d(
+    grid: torch.Tensor,
+    sigma_space: float,
+    sigma_strength: float,
+) -> torch.Tensor:
+    """
+    Builds a Gaussian kernel between grid points.
+
+    Parameters
+    ----------
+    grid : torch.Tensor
+        (N, 1) grid points
+    sigma_space : float
+        Spatial correlation length
+    sigma_strength : float
+        Strength of the Gaussian kernel
+
+    Returns
+    -------
+    K : torch.Tensor
+        (N, N) Gaussian kernel matrix
+
+    Notes
+    -----
+    K(p,q) = sigma_strength * exp(-||p-q||^2 / (2 * sigma_space^2))
+    """
     diff = grid.unsqueeze(0) - grid.unsqueeze(1)
     dist2 = diff * diff
-    return sigma_strength * torch.exp(-dist2 / (2 * sigma_space ** 2))
+    return sigma_strength * torch.exp(-dist2 / (2 * sigma_space**2))
 
 
-def _build_physical_coords(nh, nw, image_shape, pixel_size, device):
+def _build_physical_coords(
+    nh: int,
+    nw: int,
+    image_shape: tuple[int, int],
+    pixel_size: float,
+    device: torch.device,
+) -> torch.Tensor:
     """
-    Returns coords in Angstroms: (P, 2)
+    Builds physical coordinates in Angstroms.
+
+    Parameters
+    ----------
+    nh : int
+        Number of height pixels
+    nw : int
+        Number of width pixels
+    image_shape : tuple[int, int]
+        (H, W) image shape
+    pixel_size : float
+        Pixel size in Angstroms
+    device : torch.device
+        Device to use
+
+    Returns
+    -------
+    coords : torch.Tensor
+        (P, 2) coordinates in Angstroms
     """
     H_px, W_px = image_shape
     H_A = H_px * pixel_size
@@ -55,49 +140,75 @@ def _build_physical_coords(nh, nw, image_shape, pixel_size, device):
     yA = torch.linspace(0, H_A, steps=nh, device=device)
     xA = torch.linspace(0, W_A, steps=nw, device=device)
 
-    yyA, xxA = torch.meshgrid(yA, xA, indexing='ij')
+    yyA, xxA = torch.meshgrid(yA, xA, indexing="ij")
     coords = torch.stack([yyA.reshape(-1), xxA.reshape(-1)], dim=-1)
 
     return coords  # (P, 2)
 
-def _normalize_sigma_fluence(sigma, total_fluence, nt):
+
+def _normalize_sigma_fluence(
+    sigma: float,
+    total_fluence: float,
+    nt: int,
+) -> float:
     """
     Normalizes sigma_V by the fluence per frame.
+
+    Parameters
+    ----------
+    sigma : float
+        Sigma_V to normalize
+    total_fluence : float
+        Total fluence in e-/Å²
+    nt : int
+        Number of frames
+
+    Returns
+    -------
+    float
+        Normalized sigma_V
     """
     fluence_per_frame = total_fluence / nt
     return sigma * fluence_per_frame
 
 
-def _create_exponential_sigma_A(total_fluence, n_frames, A=2.0, B=0.1, C=1.0, device=None):
+def _create_exponential_sigma_A(
+    total_fluence: float,
+    n_frames: int,
+    A: float = 2.0,
+    B: float = 0.1,
+    C: float = 1.0,
+    device: torch.device | None = None,
+) -> torch.Tensor:
     """
     Create fluence-dependent sigma_A following exponential decay.
-    
+
     sigma_A(fluence) = A * exp(-B * fluence) + C
-    
+
     This allows more motion in early frames (typical for beam-induced motion)
     while maintaining stable minimum smoothness in later frames.
-    
+
     Parameters
     ----------
     total_fluence : float
-        Total accumulated fluence (e⁻/Å²)
+        Total accumulated fluence in electrons per Angstrom squared
     n_frames : int
         Number of frames (will create n_frames-2 values for velocity changes)
-    A : float
+    A : float, optional
         Amplitude parameter. Default is 2.0.
-    B : float
+    B : float, optional
         Decay rate (positive for decay, in units of 1/(e⁻/Å²)). Default is 0.1.
-    C : float
+    C : float, optional
         Constant offset (minimum sigma_A). Default is 1.0.
     device : torch.device, optional
-        Device for the tensor
-        
+        Device for the tensor. Default is None.
+
     Returns
     -------
     torch.Tensor
         Shape (n_frames-2,) containing sigma_A values for each acceleration
         (velocity change between frames)
-        
+
     Notes
     -----
     Using fluence instead of frame index makes the decay independent of
@@ -107,64 +218,101 @@ def _create_exponential_sigma_A(total_fluence, n_frames, A=2.0, B=0.1, C=1.0, de
     # For n_frames, we have n_frames-1 velocities and n_frames-2 velocity changes
     # Compute fluence at each velocity change point
     fluence_per_frame = total_fluence / n_frames
-    
+
     # Fluence at the midpoint of each velocity change interval
     # v[0]->v[1] happens around fluence 1.0*fluence_per_frame
     # v[1]->v[2] happens around fluence 2.0*fluence_per_frame, etc.
     frame_indices = torch.arange(n_frames - 2, dtype=torch.float32, device=device)
     fluence_values = (frame_indices + 1.0) * fluence_per_frame
-    
+
     # sigma_A = A * exp(-B * fluence) + C
     sigma_A = A * torch.exp(-B * fluence_values) + C
     return sigma_A
 
 
-def _compute_physical_spacing(image_shape, pixel_size, grid_resolution, total_fluence=None):
+def _compute_physical_spacing(
+    image_shape: tuple[int, int],
+    pixel_size: float,
+    grid_resolution: tuple[int, int, int],
+    total_fluence: float | None = None,
+) -> tuple[tuple[float, float], float | None]:
     """
     Compute physical spacing between grid points.
-    
-    image_shape: (H, W) in pixels
-    pixel_size: Angstroms per pixel
-    grid_resolution: (nt, nh, nw)
-    total_fluence: total fluence in e-/Å² (optional, for temporal spacing)
-    
-    Returns:
-        spatial_spacing: (dy, dx) in Angstroms
-        temporal_spacing: dt in e-/Å² (or None if total_fluence not provided)
+
+    Parameters
+    ----------
+    image_shape : tuple[int, int]
+        (H, W) in pixels
+    pixel_size : float
+        Angstroms per pixel
+    grid_resolution : tuple[int, int, int]
+        (nt, nh, nw)
+    total_fluence : float | None, optional
+        Total fluence in e-/Å² (optional, for temporal spacing)
+
+    Returns
+    -------
+    spatial_spacing : tuple[float, float]
+        (dy, dx) in Angstroms
+    temporal_spacing : float | None
+        dt in e-/Å² (or None if total_fluence not provided)
     """
     H_px, W_px = image_shape
     nt, nh, nw = grid_resolution
-    
+
     # Physical image size
     H_A = H_px * pixel_size
     W_A = W_px * pixel_size
-    
+
     # Spacing between grid points
     dy = H_A / (nh - 1) if nh > 1 else H_A
     dx = W_A / (nw - 1) if nw > 1 else W_A
     spatial_spacing = (dy, dx)
-    
+
     # Temporal spacing (fluence per frame)
     if total_fluence is not None:
         dt = total_fluence / (nt - 1) if nt > 1 else total_fluence
         temporal_spacing = dt
     else:
         temporal_spacing = None
-    
+
     return spatial_spacing, temporal_spacing
+
 
 # --------------------------------------------------------------------------
 # 1) EXACT RELION 2019 PRIOR (Exponential kernel)  --------------------------
 # --------------------------------------------------------------------------
 
-def relion2019_eigendecompose(coords, sigma_D, sigma_V, top_k=None):
-    """
-    coords: (P,2) coordinates of control points
-    Returns eigenvalues λ, eigenvectors W, and basis B = W * sqrt(λ).
-    top_k: if not None, truncate to top_k modes
-    """
 
-    P = coords.shape[0]
+def relion2019_eigendecompose(
+    coords: torch.Tensor,
+    sigma_D: float,
+    sigma_V: float,
+    top_k: int | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Eigendecomposes the exponential kernel.
+
+    Parameters
+    ----------
+    coords : torch.Tensor
+        (P, 2) coordinates of control points
+    sigma_D : float
+        Spatial correlation length
+    sigma_V : float
+        Velocity magnitude scale
+    top_k : int | None, optional
+        If not None, truncate to top_k modes
+
+    Returns
+    -------
+    vals : torch.Tensor
+        (R,) eigenvalues
+    vecs : torch.Tensor
+        (P, R) eigenvectors
+    B : torch.Tensor
+        (P, R) basis vectors
+    """
     K = _build_exponential_kernel(coords, sigma_D, sigma_V)  # (P,P)
 
     # eigendecompose kernel (symmetric PSD)
@@ -185,39 +333,68 @@ def relion2019_eigendecompose(coords, sigma_D, sigma_V, top_k=None):
     return vals, vecs, B
 
 
-def relion2019_Espace(c):
+def relion2019_Espace(c: torch.Tensor) -> torch.Tensor:
     """
+    Computes the spatial energy.
+
+    Parameters
+    ----------
+    c : torch.Tensor
+        (F, R, 2) coefficients in eigenmode basis
+
+    Returns
+    -------
+    E_space : torch.Tensor
+        Spatial energy
+
+    Notes
+    -----
     E_space = mean |c_{i,f}|^2
-    
-    Using mean instead of sum for scale-invariance when number of control
-    points differs from number of particles.
-    
-    c: (F, R, 2)   (R=number of eigenmodes)
     """
     return torch.mean(c * c)
 
 
-def relion2019_Etime(c, lam, sigma_A):
+def relion2019_Etime(
+    c: torch.Tensor,
+    lam: torch.Tensor,
+    sigma_A: float,
+) -> torch.Tensor:
     """
     Temporal smoothness in eigenmode basis.
-    
+
+    Parameters
+    ----------
+    c : torch.Tensor
+        (F, R, 2) coefficients in eigenmode basis
+    lam : torch.Tensor
+        (R,) eigenvalues
+    sigma_A : float
+        Acceleration scale
+
+    Returns
+    -------
+    E_time : torch.Tensor
+        Temporal energy
+
+    Notes
+    -----
     E_time = 1/sigma_A^2 * mean lam_i * |c_{i,f} - c_{i,f-1}|^2
-    
+
     c: (F, R, 2) - coefficients in eigenmode basis (F frames → F-1 velocities)
     lam: (R,) - eigenvalues
     sigma_A: acceleration scale. Can be scalar or tensor of shape (F-2,) for
              frame-dependent smoothness (F-1 velocities → F-2 velocity changes).
     """
-    diffs = c[1:] - c[:-1]   # (F-2, R, 2) - velocity changes
+    diffs = c[1:] - c[:-1]  # (F-2, R, 2) - velocity changes
     lam = lam.view(1, -1, 1)
-    
+
     # Handle sigma_A as scalar or tensor
     if isinstance(sigma_A, torch.Tensor) and sigma_A.ndim > 0:
         # sigma_A is (F-2,) tensor - reshape for broadcasting over (F-2, 1, 1)
-        sigma_A_sq = (sigma_A ** 2).view(-1, 1, 1)
+        sigma_A_sq = (sigma_A**2).view(-1, 1, 1)
     else:
-        sigma_A_sq = sigma_A ** 2
-    
+        sigma_A_sq = sigma_A**2
+
     return torch.mean(lam * (diffs * diffs) / sigma_A_sq)
 
 
@@ -225,9 +402,40 @@ def relion2019_Etime(c, lam, sigma_A):
 # 2) FAST SEPARABLE GAUSSIAN PRIOR (Kronecker) ------------------------------
 # --------------------------------------------------------------------------
 
-def separable_eigendecompose(nx, ny, sigma_space, sigma_strength, device):
+
+def separable_eigendecompose(
+    nx: int,
+    ny: int,
+    sigma_space: float,
+    sigma_strength: float,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Returns lam_x, Ux, lam_y, Uy
+    Eigendecomposes the Gaussian kernels.
+
+    Parameters
+    ----------
+    nx : int
+        Number of x grid points
+    ny : int
+        Number of y grid points
+    sigma_space : float
+        Spatial correlation length
+    sigma_strength : float
+        Strength of the Gaussian kernel
+    device : torch.device
+        Device to use
+
+    Returns
+    -------
+    lam_x : torch.Tensor
+        (nx,) eigenvalues
+    Ux : torch.Tensor
+        (nx, nx) eigenvectors
+    lam_y : torch.Tensor
+        (ny,) eigenvalues
+    Uy : torch.Tensor
+        (ny, ny) eigenvectors
     """
     xs = torch.linspace(0, 1, nx, device=device)
     ys = torch.linspace(0, 1, ny, device=device)
@@ -249,24 +457,80 @@ def separable_eigendecompose(nx, ny, sigma_space, sigma_strength, device):
     return lam_x, Ux, lam_y, Uy
 
 
-def separable_project_velocities(v, Ux, Uy):
+def separable_project_velocities(
+    v: torch.Tensor,
+    Ux: torch.Tensor,
+    Uy: torch.Tensor,
+) -> torch.Tensor:
     """
-    v: (F, ny, nx, 2)
-    returns a: coefficients (F, rx, ry, 2)
+    Projects velocities onto the eigenmodes.
+
+    Parameters
+    ----------
+    v : torch.Tensor
+        (F, ny, nx, 2) velocities
+    Ux : torch.Tensor
+        (nx, nx) eigenvectors
+    Uy : torch.Tensor
+        (ny, ny) eigenvectors
+
+    Returns
+    -------
+    a : torch.Tensor
+        (F, rx, ry, 2) coefficients
     """
     return torch.einsum("xi,yj,fxyc->fijc", Ux, Uy, v)
 
 
-def separable_Espace(a):
+def separable_Espace(a: torch.Tensor) -> torch.Tensor:
     """
+    Computes the spatial energy.
+
+    Parameters
+    ----------
+    a : torch.Tensor
+        (F, rx, ry, 2) coefficients
+
+    Returns
+    -------
+    E_space : torch.Tensor
+        Spatial energy
+
+    Notes
+    -----
     E_space = sum_f sum_ij |a_ij,f|^2
     Equivalent to eq. (5).
     """
     return torch.sum(a * a)
 
 
-def separable_Etime(a, lam_x, lam_y, sigma_A):
+def separable_Etime(
+    a: torch.Tensor,
+    lam_x: torch.Tensor,
+    lam_y: torch.Tensor,
+    sigma_A: float,
+) -> torch.Tensor:
     """
+    Computes the temporal energy.
+
+    Parameters
+    ----------
+    a : torch.Tensor
+        (F, rx, ry, 2) coefficients
+    lam_x : torch.Tensor
+        (nx,) eigenvalues
+    lam_y : torch.Tensor
+        (ny,) eigenvalues
+    sigma_A : float
+        Acceleration scale
+
+    Returns
+    -------
+    E_time : torch.Tensor
+        Temporal energy
+
+    Notes
+    -----
     Derived from RELION eq. (11):
     lam_ij = lam_x[i] * lam_y[j]
     E_time = 1/sigma_A^2 * sum_f sum_{i,j} lam_ij |a[f,i,j] - a[f-1,i,j]|^2
@@ -274,29 +538,42 @@ def separable_Etime(a, lam_x, lam_y, sigma_A):
     diffs = a[1:] - a[:-1]  # (F-1, rx, ry, 2)
 
     lam = lam_x.view(1, -1, 1, 1) * lam_y.view(1, 1, -1, 1)
-    return (1.0 / sigma_A ** 2) * torch.sum(lam * (diffs * diffs))
+    return (1.0 / sigma_A**2) * torch.sum(lam * (diffs * diffs))
 
 
 # --------------------------------------------------------------------------
 # 3) LAPLACIAN PRIOR --------------------------------------------------------
 # --------------------------------------------------------------------------
 
-def laplacian_Espace(field, alpha=1.0, spatial_spacing=None):
+
+def laplacian_Espace(
+    field: torch.Tensor,
+    alpha: float = 1.0,
+    spatial_spacing: tuple[float, float] | None = None,
+) -> torch.Tensor:
     """
     Spatial smoothness with physical distance weighting.
-    
-    field: (2, nt, nh, nw)
-    alpha: regularization strength (dimensionless)
-    spatial_spacing: (dy_physical, dx_physical) spacing in Angstroms
-                     If None, assumes unit spacing
-    
+
+    Parameters
+    ----------
+    field : torch.Tensor
+        (2, nt, nh, nw)
+    alpha : float, optional
+        Regularization strength (dimensionless)
+    spatial_spacing : tuple[float, float] | None, optional
+        (dy_physical, dx_physical) spacing in Angstroms
+        If None, assumes unit spacing
+
+    Returns
+    -------
+    E_space : torch.Tensor
+        Spatial energy
+
+    Notes
+    -----
     E_space = alpha * mean |(u - u_neighbor)/distance|^2
             = alpha * mean |u - u_neighbor|^2 / distance^2
-    
-    Physical interpretation: closer points (smaller spacing) should be more correlated,
-    so differences between them are penalized more (divide by smaller distance^2).
     """
-    _, nt, nh, nw = field.shape
     field2 = field.permute(1, 2, 3, 0)  # (nt, nh, nw, 2)
 
     if spatial_spacing is None:
@@ -306,7 +583,7 @@ def laplacian_Espace(field, alpha=1.0, spatial_spacing=None):
 
     total = 0.0
     count = 0
-    
+
     # Vertical neighbors (dy direction)
     for dy in [1, -1]:
         rolled = torch.roll(field2, shifts=(dy, 0), dims=(1, 2))
@@ -316,9 +593,9 @@ def laplacian_Espace(field, alpha=1.0, spatial_spacing=None):
             rolled[:, dy:, :, :] = 0
         diff = field2 - rolled
         # Weight by 1/dy_phys^2 (units: spatial gradient squared)
-        total = total + torch.sum(diff * diff) / (dy_phys ** 2)
+        total = total + torch.sum(diff * diff) / (dy_phys**2)
         count += diff.numel()
-    
+
     # Horizontal neighbors (dx direction)
     for dx in [1, -1]:
         rolled = torch.roll(field2, shifts=(0, dx), dims=(1, 2))
@@ -328,84 +605,132 @@ def laplacian_Espace(field, alpha=1.0, spatial_spacing=None):
             rolled[:, :, dx:, :] = 0
         diff = field2 - rolled
         # Weight by 1/dx_phys^2
-        total = total + torch.sum(diff * diff) / (dx_phys ** 2)
+        total = total + torch.sum(diff * diff) / (dx_phys**2)
         count += diff.numel()
 
     return alpha * (total / count)
 
 
-def laplacian_Etime(field, sigma_A, temporal_spacing=None):
+def laplacian_Etime(
+    field: torch.Tensor,
+    sigma_A: float,
+    temporal_spacing: float | None = None,
+) -> torch.Tensor:
     """
     Temporal smoothness with physical fluence weighting.
-    
-    field: (2, nt, nh, nw)
-    sigma_A: acceleration scale in Å/(e⁻/Å²) if temporal_spacing provided,
-             otherwise Å/frame. Can be scalar or tensor of shape (nt-2,) for
-             frame-dependent smoothness.
-    temporal_spacing: fluence per frame (e⁻/Å²)
-                      If None, assumes unit spacing
-    
+
+    Parameters
+    ----------
+    field : torch.Tensor
+        (2, nt, nh, nw)
+    sigma_A : float
+        Acceleration scale in Å/(e⁻/Å²) if temporal_spacing provided,
+        otherwise Å/frame. Can be scalar or tensor of shape (nt-2,) for
+        frame-dependent smoothness.
+    temporal_spacing : float | None, optional
+        Fluence per frame (e⁻/Å²)
+        If None, assumes unit spacing
+
+    Returns
+    -------
+    E_time : torch.Tensor
+        Temporal energy
+
+    Notes
+    -----
     E_time = 1/sigma_A^2 * mean |(v[f] - v[f-1])/dt|^2
            = 1/(sigma_A^2 * dt^2) * mean |v[f] - v[f-1]|^2
-    
-    Physical interpretation: frames closer in fluence (smaller dt) should have
-    more correlated velocities, so velocity changes are penalized more (divide by smaller dt^2).
     """
-    v = field[:, 1:] - field[:, :-1]         # (2, nt-1, nh, nw)
-    dv = v[:, 1:] - v[:, :-1]                # (2, nt-2, nh, nw)
-    
+    v = field[:, 1:] - field[:, :-1]  # (2, nt-1, nh, nw)
+    dv = v[:, 1:] - v[:, :-1]  # (2, nt-2, nh, nw)
+
     if temporal_spacing is None:
         dt = 1.0
     else:
         dt = temporal_spacing
-    
+
     # Handle sigma_A as scalar or tensor
     if isinstance(sigma_A, torch.Tensor) and sigma_A.ndim > 0:
         # sigma_A is (nt-2,) tensor - reshape for broadcasting
         # dv is (2, nt-2, nh, nw), we want sigma_A to broadcast over (1, nt-2, 1, 1)
-        sigma_A_sq = (sigma_A ** 2).view(1, -1, 1, 1)
+        sigma_A_sq = (sigma_A**2).view(1, -1, 1, 1)
     else:
-        sigma_A_sq = sigma_A ** 2
-    
+        sigma_A_sq = sigma_A**2
+
     # Weight by 1/dt^2 (units: dv/dt is acceleration)
-    return torch.mean(dv * dv / (sigma_A_sq * dt ** 2))
+    return torch.mean(dv * dv / (sigma_A_sq * dt**2))
 
 
 # --------------------------------------------------------------------------
 # Convenience wrappers
 # --------------------------------------------------------------------------
 
-def relion2019_compute(field, coords, sigma_D, sigma_V, sigma_A, top_k=None):
+
+def relion2019_compute(
+    field: torch.Tensor,
+    coords: torch.Tensor,
+    sigma_D: float,
+    sigma_V: float,
+    sigma_A: float,
+    top_k: int | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    field: (2, nt, P_y, P_x)
-    coords: (P, 2)
-    returns E_space, E_time
+    Computes the RELION 2019 energy.
+
+    Parameters
+    ----------
+    field : torch.Tensor
+        (2, nt, nh, nw)
+    coords : torch.Tensor
+        (P, 2)
+    sigma_D : float
+        Spatial correlation length
+    sigma_V : float
+        Velocity magnitude scale
+    sigma_A : float
+        Acceleration scale
+    top_k : int | None, optional
+        If not None, truncate to top_k modes
+
+    Returns
+    -------
+    E_space : torch.Tensor
+        Spatial energy
+    E_time : torch.Tensor
+        Temporal energy
+
+    Notes
+    -----
+    E_space = mean |c_{i,f}|^2
+    E_time = 1/sigma_A^2 * mean lam_i * |c_{i,f} - c_{i,f-1}|^2
     """
     _, nt, nh, nw = field.shape
     P = nh * nw
 
-    #field[:, 1:]: (2, nt-1, P_y, P_x) - frames 1 through nt-1
-    #field[:, :-1]: (2, nt-1, P_y, P_x) - frames 0 through nt-1
-    #Difference: (2, nt-1, P_y, P_x) - velocity between consecutive frames
-    #.permute(1, 2, 3, 0): (nt-1, P_y, P_x, 2) - moves time first, components last
-    #.reshape(nt-1, P, 2): (nt-1, P_y * P_x, 2) - flattens spatial grid
+    # field[:, 1:]: (2, nt-1, P_y, P_x) - frames 1 through nt-1
+    # field[:, :-1]: (2, nt-1, P_y, P_x) - frames 0 through nt-1
+    # Difference: (2, nt-1, P_y, P_x) - velocity between consecutive frames
+    # .permute(1, 2, 3, 0): (nt-1, P_y, P_x, 2) - moves time first, components last
+    # .reshape(nt-1, P, 2): (nt-1, P_y * P_x, 2) - flattens spatial grid
     # velocities: (F, P, 2)
-    v = (field[:, 1:] - field[:, :-1]).permute(1, 2, 3, 0).reshape(nt-1, P, 2)
+    v = (field[:, 1:] - field[:, :-1]).permute(1, 2, 3, 0).reshape(nt - 1, P, 2)
 
     # eigendecompose Σ_V
-    lam, vecs, B = relion2019_eigendecompose(coords, sigma_D, sigma_V, top_k)
-    #lam: (R,) - eigenvalues (R ≤ P, possibly truncated)
-    #vecs: (P, R) - eigenvectors (each column is one eigenvector)
-    #B: (P, R) - basis vectors
+    lam, vecs, _ = relion2019_eigendecompose(coords, sigma_D, sigma_V, top_k)
+    # lam: (R,) - eigenvalues (R ≤ P, possibly truncated)
+    # vecs: (P, R) - eigenvectors (each column is one eigenvector)
+    # B: (P, R) - basis vectors
 
     # project velocities: c[f,i,d], using v[f,p,d] = sum_i B[p,i] c[f,i,d]
-    #Bt = B.t()  # (R, P)
-    #c = torch.einsum("rp,fpc->frc", Bt, v)  # (F-1, R, 2)
+    # Bt = B.t()  # (R, P)
+    # c = torch.einsum("rp,fpc->frc", Bt, v)  # (F-1, R, 2)
 
-    c = torch.einsum("rp,fpc->frc", vecs.t(), v) / torch.sqrt(lam + 1e-12).view(1, -1, 1)
-    #vecs.t(): (r, p) - eigenvector matrix transposed
-    #v: (f, p, 2) - velocities, 2 for x and y components
-    #c: (f, r, 2) - coefficients
+    c = torch.einsum("rp,fpc->frc", vecs.t(), v) / torch.sqrt(lam + 1e-12).view(
+        1, -1, 1
+    )
+    # vecs.t(): (r, p) - eigenvector matrix transposed
+    # v: (f, p, 2) - velocities, 2 for x and y components
+    # c: (f, r, 2) - coefficients
 
     E_space = relion2019_Espace(c)
     E_time = relion2019_Etime(c, lam, sigma_A)
@@ -413,12 +738,44 @@ def relion2019_compute(field, coords, sigma_D, sigma_V, sigma_A, top_k=None):
     return E_space, E_time
 
 
-def separable_compute(field, lam_x, Ux, lam_y, Uy, sigma_A):
+def separable_compute(
+    field: torch.Tensor,
+    lam_x: torch.Tensor,
+    Ux: torch.Tensor,
+    lam_y: torch.Tensor,
+    Uy: torch.Tensor,
+    sigma_A: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    field: (2, nt, nh, nw)
-    """
-    _, nt, nh, nw = field.shape
+    Computes the separable energy.
 
+    Parameters
+    ----------
+    field : torch.Tensor
+        (2, nt, nh, nw)
+    lam_x : torch.Tensor
+        (nx,) eigenvalues
+    Ux : torch.Tensor
+        (nx, nx) eigenvectors
+    lam_y : torch.Tensor
+        (ny,) eigenvalues
+    Uy : torch.Tensor
+        (ny, ny) eigenvectors
+    sigma_A : float
+        Acceleration scale
+
+    Returns
+    -------
+    E_space : torch.Tensor
+        Spatial energy
+    E_time : torch.Tensor
+        Temporal energy
+
+    Notes
+    -----
+    E_space = sum_f sum_ij |a_ij,f|^2
+    E_time = 1/sigma_A^2 * sum_f sum_{i,j} lam_ij |a[f,i,j] - a[f-1,i,j]|^2
+    """
     # velocities: (F, ny, nx, 2)
     v = (field[:, 1:] - field[:, :-1]).permute(1, 2, 3, 0)
 
@@ -429,15 +786,42 @@ def separable_compute(field, lam_x, Ux, lam_y, Uy, sigma_A):
     return E_space, E_time
 
 
-def laplacian_compute(field, sigma_A, alpha=1.0, spatial_spacing=None, temporal_spacing=None):
+def laplacian_compute(
+    field: torch.Tensor,
+    sigma_A: float,
+    alpha: float = 1.0,
+    spatial_spacing: tuple[float, float] | None = None,
+    temporal_spacing: float | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Compute Laplacian spatial and temporal energies with physical spacing.
-    
-    field: (2, nt, nh, nw)
-    sigma_A: temporal smoothness parameter
-    alpha: spatial smoothness strength
-    spatial_spacing: (dy, dx) in Angstroms
-    temporal_spacing: dt in fluence (e-/Å²)
+
+    Parameters
+    ----------
+    field : torch.Tensor
+        (2, nt, nh, nw)
+    sigma_A : float
+        Temporal smoothness parameter
+    alpha : float, optional
+        Spatial smoothness strength
+    spatial_spacing : tuple[float, float] | None, optional
+        (dy, dx) in Angstroms
+    temporal_spacing : float | None, optional
+        dt in fluence (e-/Å²)
+
+    Returns
+    -------
+    E_space : torch.Tensor
+        Spatial energy
+    E_time : torch.Tensor
+        Temporal energy
+
+    Notes
+    -----
+    E_space = alpha * mean |(u - u_neighbor)/distance|^2
+            = alpha * mean |u - u_neighbor|^2 / distance^2
+    E_time = 1/sigma_A^2 * mean |(v[f] - v[f-1])/dt|^2
+           = 1/(sigma_A^2 * dt^2) * mean |v[f] - v[f-1]|^2
     """
     E_space = laplacian_Espace(field, alpha, spatial_spacing)
     E_time = laplacian_Etime(field, sigma_A, temporal_spacing)

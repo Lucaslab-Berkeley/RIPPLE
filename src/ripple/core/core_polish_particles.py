@@ -217,7 +217,7 @@ def core_polish_particles(
         "intermediate_fields_dir": intermediate_fields_dir,
     }
     # Prior parameters only for bayesian estimation
-    prior_kwargs = {
+    prior_kwargs: dict[str, Any] = {
         "prior_type": prior_type,
         "sigma_D": sigma_D,
         "sigma_V": sigma_V,
@@ -239,7 +239,7 @@ def core_polish_particles(
                 **estimate_kwargs,
                 **prior_kwargs,
                 particle_batch_size=particle_batch_size,
-                pixel_spacing=pixel_size
+                pixel_spacing=pixel_size,
             )
         else:
             updated_deformation_field, trajectory = estimate_local_motion_2dtm_bayesian(
@@ -437,7 +437,7 @@ def estimate_local_motion_2dtm_bayesian(
     ).to(device)
     print("New deformation field made")
 
-        # Setup prior-specific parameters
+    # Setup prior-specific parameters
     prior_params = _setup_priors(
         prior_type=prior_type,
         sigma_A_exponential=sigma_A_exponential,
@@ -1092,7 +1092,7 @@ def _compute_loss(
     sigma_V_norm: float | None = None,
     sigma_A_norm: torch.Tensor | float | None = None,
     alpha_spatial: float | None = None,
-    spatial_spacing: float | None = None,
+    spatial_spacing: tuple[float, float] | None = None,
     temporal_spacing: float | None = None,
 ) -> torch.Tensor:
     """Compute loss with motion priors.
@@ -1133,20 +1133,39 @@ def _compute_loss(
         Computed loss value.
     """
     # Compute motion priors
-    E_space = 0.0
-    E_time = 0.0
+    E_space = torch.tensor(0.0, device=deformation_field._data.device)
+    E_time = torch.tensor(0.0, device=deformation_field._data.device)
     if prior_type == "relion":
+        assert sigma_D is not None, "sigma_D is required for relion prior"
+        assert sigma_V_norm is not None, "sigma_V_norm is required for relion prior"
+        assert sigma_A_norm is not None, "sigma_A_norm is required for relion prior"
+        # Convert tensor to float if needed
+        sigma_A_val = (
+            float(sigma_A_norm)
+            if isinstance(sigma_A_norm, torch.Tensor)
+            else sigma_A_norm
+        )
         E_space, E_time = relion2019_compute(
             field=deformation_field._data,
             coords=image_coords,
             sigma_D=sigma_D,
             sigma_V=sigma_V_norm,
-            sigma_A=sigma_A_norm,
+            sigma_A=sigma_A_val,
         )
     elif prior_type == "laplacian":
+        assert sigma_A_norm is not None, "sigma_A_norm is required for laplacian prior"
+        assert alpha_spatial is not None, (
+            "alpha_spatial is required for laplacian prior"
+        )
+        # Convert tensor to float if needed
+        sigma_A_val = (
+            float(sigma_A_norm)
+            if isinstance(sigma_A_norm, torch.Tensor)
+            else sigma_A_norm
+        )
         E_space, E_time = laplacian_compute(
             field=deformation_field._data,
-            sigma_A=sigma_A_norm,
+            sigma_A=sigma_A_val,
             alpha=alpha_spatial,
             spatial_spacing=spatial_spacing,
             temporal_spacing=temporal_spacing,

@@ -10,8 +10,8 @@ import mrcfile
 import numpy as np
 import optuna
 import pandas as pd
-from scipy.optimize import minimize
 import torch
+from scipy.optimize import minimize
 from torch_cubic_spline_grids import CubicCatmullRomGrid3d
 from torch_motion_correction.deformation_field_utils import (
     resample_deformation_field,
@@ -26,8 +26,8 @@ from .core_utils import (
     _create_batch_configs,
     _filter_particles_by_quality,
     _make_differentiable_refine_manager,
+    get_batch_mean_std_stacks,
 )
-from .core_utils import get_batch_mean_std_stacks
 from .motion_priors import (
     _build_physical_coords,
     _compute_physical_spacing,
@@ -444,6 +444,12 @@ def optimize_sigmas_2dtm_nelder_mead(
         cleanup_memory=True,  # Clean up memory after batch stacks
     )
 
+    # Explicitly capture variables for closure (helps linter recognize them)
+    _batch_mean_stacks = batch_mean_stacks
+    _batch_std_stacks = batch_std_stacks
+    _template_volume = template_volume
+    _validation_template = validation_template
+
     validation_loss_history = []
     training_loss_history = []
     sigma_history = []
@@ -454,13 +460,14 @@ def optimize_sigmas_2dtm_nelder_mead(
     best_sigma_params = None
 
     # Objective function for scipy.optimize.minimize
-    def objective_function(x):
+    def objective_function(x: np.ndarray) -> float:
         """Objective function for Nelder-Mead optimization.
 
         Args:
             x: numpy array of parameter values (in order of param_names)
 
-        Returns:
+        Returns
+        -------
             validation_loss: float
         """
         # Set sigma parameters from x
@@ -476,9 +483,9 @@ def optimize_sigmas_2dtm_nelder_mead(
             image=image,
             batch_config_paths=batch_config_paths,
             batch_particle_indices=batch_particle_indices,
-            batch_mean_stacks=batch_mean_stacks,
-            batch_std_stacks=batch_std_stacks,
-            template_volume=template_volume,
+            batch_mean_stacks=_batch_mean_stacks,
+            batch_std_stacks=_batch_std_stacks,
+            template_volume=_template_volume,
             pixel_spacing=pixel_spacing,
             pre_exposure=pre_exposure,
             fluence_per_frame=fluence_per_frame,
@@ -496,10 +503,10 @@ def optimize_sigmas_2dtm_nelder_mead(
             deformation_field_to_use=deformation_field,
             batch_config_paths=batch_config_paths,
             batch_particle_indices=batch_particle_indices,
-            batch_mean_stacks=batch_mean_stacks,
-            batch_std_stacks=batch_std_stacks,
+            batch_mean_stacks=_batch_mean_stacks,
+            batch_std_stacks=_batch_std_stacks,
             image=image,
-            validation_template=validation_template,
+            validation_template=_validation_template,
             total_n_particles=total_n_particles,
             pre_exposure=pre_exposure,
             fluence_per_frame=fluence_per_frame,
@@ -557,12 +564,12 @@ def optimize_sigmas_2dtm_nelder_mead(
         result = minimize(
             objective_function,
             x0,
-            method='Nelder-Mead',
+            method="Nelder-Mead",
             options={
-                'maxiter': sigma_iterations,
-                'xatol': 1e-6,  # Absolute tolerance for convergence
-                'fatol': 1e-6,  # Function value tolerance
-                'disp': verbose,
+                "maxiter": sigma_iterations,
+                "xatol": 1e-6,  # Absolute tolerance for convergence
+                "fatol": 1e-6,  # Function value tolerance
+                "disp": verbose,
             },
         )
 
@@ -612,7 +619,11 @@ def optimize_sigmas_2dtm_nelder_mead(
 
         # Use best point if it's better than final point
         final_validation_loss = validation_loss_history[-1]
-        if best_validation_loss is not None and final_validation_loss > best_validation_loss:
+        if (
+            best_validation_loss is not None
+            and best_sigma_params is not None
+            and final_validation_loss > best_validation_loss
+        ):
             if verbose:
                 print(f"\nFinal validation loss ({final_validation_loss:.6f})")
                 print(f" is worse than best ({best_validation_loss:.6f})")
@@ -650,7 +661,11 @@ def optimize_sigmas_2dtm_nelder_mead(
             optimized_sigmas = sigma_params.copy()
 
         # Print summary
-        if verbose and best_validation_loss is not None:
+        if (
+            verbose
+            and best_validation_loss is not None
+            and best_sigma_params is not None
+        ):
             print("\n" + "=" * 70)
             print("OPTIMIZATION SUMMARY")
             print("=" * 70)
@@ -699,6 +714,7 @@ def optimize_sigmas_2dtm_nelder_mead(
         result_dict["best_sigma_params"] = best_sigma_params
 
     return result_dict
+
 
 def optimize_sigmas_2dtm_optuna(
     image: torch.Tensor,  # (t, H, W)
@@ -940,11 +956,17 @@ def optimize_sigmas_2dtm_optuna(
     sigma_history = []
 
     # Objective function for Optuna
-    def objective(trial):
+    def objective(trial: optuna.Trial) -> float:
         """Objective function for Optuna optimization."""
+        # Type assertion: initial_values is a dict for Optuna (use_dict=True)
+        assert isinstance(initial_values, dict), (
+            "initial_values must be a dict for Optuna"
+        )
+        initial_values_dict: dict[str, float] = initial_values
+
         # Suggest parameter values using log-uniform for wide ranges
         for param_name in param_names:
-            initial_val = initial_values[param_name]
+            initial_val = initial_values_dict[param_name]
 
             # Use log-uniform for parameters that span orders of magnitude
             if param_name == "alpha_spatial" or param_name == "sigma_D":
@@ -953,7 +975,7 @@ def optimize_sigmas_2dtm_optuna(
                     param_name,
                     low=max(initial_val * param_range_low, 1e-6),
                     high=initial_val * param_range_high,
-                    log=True
+                    log=True,
                 )
             else:
                 # Use uniform for smaller ranges
@@ -961,7 +983,7 @@ def optimize_sigmas_2dtm_optuna(
                     param_name,
                     low=max(initial_val * param_range_low, 1e-6),
                     high=initial_val * param_range_high,
-                    log=False
+                    log=False,
                 )
 
             sigma_params[param_name] = suggested_val
@@ -1015,10 +1037,10 @@ def optimize_sigmas_2dtm_optuna(
         sigma_history.append(current_sigmas.copy())
 
         if verbose:
-            print(
-                f"Trial {trial.number}: Parameters: "
-                f"{dict(zip(param_names, [sigma_params[n] for n in param_names], strict=True))}"
+            param_dict = dict(
+                zip(param_names, [sigma_params[n] for n in param_names], strict=True)
             )
+            print(f"Trial {trial.number}: Parameters: {param_dict}")
             print(f"  Validation loss: {validation_loss:.6f}")
 
         return validation_loss
@@ -1202,32 +1224,28 @@ def _compute_validation_loss_common(
             batch_particle_stack = batch_refine_manager.particle_stack
             batch_size = len(batch_indices[0])
 
-            image_stack_batch = (
-                batch_particle_stack.construct_image_stack_from_movie(
-                    movie=image,
-                    deformation_field=deformation_field_to_use,
-                    pos_reference="top-left",
-                    handle_bounds="pad",
-                    padding_mode="reflect",
-                    padding_value=0.0,
-                    pre_exposure=pre_exposure,
-                    fluence_per_frame=fluence_per_frame,
-                )
+            image_stack_batch = batch_particle_stack.construct_image_stack_from_movie(
+                movie=image,
+                deformation_field=deformation_field_to_use,
+                pos_reference="top-left",
+                handle_bounds="pad",
+                padding_mode="reflect",
+                padding_value=0.0,
+                pre_exposure=pre_exposure,
+                fluence_per_frame=fluence_per_frame,
             )
 
             # Reuse pre-computed mean/std stacks (same as motion loop)
             batch_mean_stack = batch_mean_stacks[batch_config_path]
             batch_std_stack = batch_std_stacks[batch_config_path]
 
-            backend_kwargs = (
-                batch_refine_manager.make_differentiable_backend_kwargs(
-                    image_stack=image_stack_batch,
-                    mean_stack=batch_mean_stack,
-                    std_stack=batch_std_stack,
-                    particle_indices=batch_indices,
-                    template_tensor=validation_template,
-                    images_are_particles=True,
-                )
+            backend_kwargs = batch_refine_manager.make_differentiable_backend_kwargs(
+                image_stack=image_stack_batch,
+                mean_stack=batch_mean_stack,
+                std_stack=batch_std_stack,
+                particle_indices=batch_indices,
+                template_tensor=validation_template,
+                images_are_particles=True,
             )
             result = batch_refine_manager.get_refine_result(
                 backend_kwargs, correlation_batch_size, use_differentiable=True
@@ -1406,7 +1424,11 @@ def _collect_sigma_parameters(
     if len(param_names) == 0:
         raise ValueError("No sigma parameters selected for optimization!")
 
-    return param_names, initial_values_dict if use_dict else initial_values_list, sigma_params
+    return (
+        param_names,
+        initial_values_dict if use_dict else initial_values_list,
+        sigma_params,
+    )
 
 
 # pylint: disable=too-many-arguments,too-many-locals
@@ -1448,10 +1470,11 @@ def _setup_prior_params(
         - For "laplacian": spatial_spacing, temporal_spacing, sigma_A_tensor, alpha
         - For "relion": image_coords, sigma_D_val, sigma_V_norm, sigma_A_norm
     """
+
     def get_val(key: str) -> Any:
         """Get parameter value, handling both dict and tensor cases."""
         v = sigma_params.get(key)
-        return abs(v) if isinstance(v, (int, float)) else v
+        return abs(v) if isinstance(v, int | float) else v
 
     prior_params: dict[str, Any] = {}
 
@@ -1505,17 +1528,13 @@ def _setup_prior_params(
 
         sigma_D_val = get_val("sigma_D")
         sigma_D_val = (
-            sigma_D_val.item()
-            if isinstance(sigma_D_val, torch.Tensor)
-            else sigma_D_val
+            sigma_D_val.item() if isinstance(sigma_D_val, torch.Tensor) else sigma_D_val
         )
         prior_params["sigma_D_val"] = sigma_D_val
 
         sigma_V_val = get_val("sigma_V")
         sigma_V_val = (
-            sigma_V_val.item()
-            if isinstance(sigma_V_val, torch.Tensor)
-            else sigma_V_val
+            sigma_V_val.item() if isinstance(sigma_V_val, torch.Tensor) else sigma_V_val
         )
         sigma_V_norm = _normalize_sigma_fluence(
             sigma_V_val,
@@ -1706,7 +1725,7 @@ def _setup_optimizer(
         temp_dir=temp_dir,
     )
 
-    with mrcfile.open(validation_template_path, mode='r') as mrc:
+    with mrcfile.open(validation_template_path, mode="r") as mrc:
         validation_template = torch.tensor(
             mrc.data.copy(), device=device, dtype=torch.float32
         )
@@ -1854,10 +1873,11 @@ def _run_inner_optimization_common(
     tuple[CubicCatmullRomGrid3d, float]
         Tuple of (deformation_field, accumulated_loss)
     """
+
     def get_val(key: str) -> Any:
         """Get parameter value, handling both dict and tensor cases."""
         v = sigma_params.get(key)
-        return abs(v) if isinstance(v, (int, float)) else v
+        return abs(v) if isinstance(v, int | float) else v
 
     # Initialize deformation field
     if initial_deformation_field is None:
@@ -1874,9 +1894,9 @@ def _run_inner_optimization_common(
         deformation_field_data = deformation_field_data.detach().clone()
 
     deformation_field_data.requires_grad_(True)
-    deformation_field = CubicCatmullRomGrid3d.from_grid_data(
-        deformation_field_data
-    ).to(device)
+    deformation_field = CubicCatmullRomGrid3d.from_grid_data(deformation_field_data).to(
+        device
+    )
     motion_optimizer = torch.optim.Adam(
         deformation_field.parameters(), lr=optimizer_kwargs["lr"]
     )
@@ -1908,32 +1928,28 @@ def _run_inner_optimization_common(
             batch_particle_stack = batch_refine_manager.particle_stack
             batch_size = len(batch_indices[0])
 
-            image_stack_batch = (
-                batch_particle_stack.construct_image_stack_from_movie(
-                    movie=image,
-                    deformation_field=deformation_field,
-                    pos_reference="top-left",
-                    handle_bounds="pad",
-                    padding_mode="reflect",
-                    padding_value=0.0,
-                    pre_exposure=pre_exposure,
-                    fluence_per_frame=fluence_per_frame,
-                )
+            image_stack_batch = batch_particle_stack.construct_image_stack_from_movie(
+                movie=image,
+                deformation_field=deformation_field,
+                pos_reference="top-left",
+                handle_bounds="pad",
+                padding_mode="reflect",
+                padding_value=0.0,
+                pre_exposure=pre_exposure,
+                fluence_per_frame=fluence_per_frame,
             )
 
             # Reuse pre-computed mean/std stacks
             batch_mean_stack = batch_mean_stacks[batch_config_path]
             batch_std_stack = batch_std_stacks[batch_config_path]
 
-            backend_kwargs = (
-                batch_refine_manager.make_differentiable_backend_kwargs(
-                    image_stack=image_stack_batch,
-                    mean_stack=batch_mean_stack,
-                    std_stack=batch_std_stack,
-                    particle_indices=batch_indices,
-                    template_tensor=template_volume,
-                    images_are_particles=True,
-                )
+            backend_kwargs = batch_refine_manager.make_differentiable_backend_kwargs(
+                image_stack=image_stack_batch,
+                mean_stack=batch_mean_stack,
+                std_stack=batch_std_stack,
+                particle_indices=batch_indices,
+                template_tensor=template_volume,
+                images_are_particles=True,
             )
             result = batch_refine_manager.get_refine_result(
                 backend_kwargs, correlation_batch_size, use_differentiable=True

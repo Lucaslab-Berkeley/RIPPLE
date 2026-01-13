@@ -35,13 +35,13 @@ def main():
     """Run sigma optimization for movies in directory."""
     movie_paths = get_movie_paths(MOVIE_DIR)
     polish_manager = PolishParticlesManager.from_yaml(OPTIMIZE_YAML_PATH)
-    
+
     # Verify sigma optimization is enabled
     if not polish_manager.alignment_config.optimize_sigmas:
         print("WARNING: optimize_sigmas is False in config!")
         print("Set optimize_sigmas: true to run sigma optimization.")
         return
-    
+
     for movie_path in movie_paths:
         print(f"\nProcessing: {movie_path}")
         polish_manager.movie_config.movie_path = movie_path
@@ -53,4 +53,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

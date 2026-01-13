@@ -287,4 +287,3 @@ def _make_differentiable_refine_manager(
     # override the movie_params here
     refine_manager.movie_config.enabled = False
     return refine_manager
-

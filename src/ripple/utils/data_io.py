@@ -347,25 +347,25 @@ def save_optimize_sigmas_to_json(
         Print messages when saving files. Default True
     """
     if optimized_sigmas_output_path is not None:
-        with open(optimized_sigmas_output_path, 'w', encoding='utf-8') as f:
+        with open(optimized_sigmas_output_path, "w", encoding="utf-8") as f:
             json.dump(optimized_sigmas, f, indent=2)
         if verbose:
             print(f"Saved optimized sigmas to: {optimized_sigmas_output_path}")
 
     if sigma_history_output_path is not None:
-        with open(sigma_history_output_path, 'w', encoding='utf-8') as f:
+        with open(sigma_history_output_path, "w", encoding="utf-8") as f:
             json.dump(sigma_history, f, indent=2)
         if verbose:
             print(f"Saved sigma history to: {sigma_history_output_path}")
 
     if training_history_output_path is not None:
-        with open(training_history_output_path, 'w', encoding='utf-8') as f:
+        with open(training_history_output_path, "w", encoding="utf-8") as f:
             json.dump(training_loss_history, f, indent=2)
         if verbose:
             print(f"Saved training history to: {training_history_output_path}")
 
     if validation_history_output_path is not None:
-        with open(validation_history_output_path, 'w', encoding='utf-8') as f:
+        with open(validation_history_output_path, "w", encoding="utf-8") as f:
             json.dump(validation_loss_history, f, indent=2)
         if verbose:
             print(f"Saved validation history to: {validation_history_output_path}")

@@ -226,7 +226,7 @@ class PolishParticlesConfig(BaseAlignmentConfig):
     best_n: PositiveInt = 10000000000
 
     # Nested configs with defaults
-    prior_config: PriorConfig = Field(default_factory=PriorConfig)  # type: ignore[assignment]
+    prior_config: PriorConfig = Field(default_factory=PriorConfig)
     optimization_config: OptimizationConfig | None = None
 
     @property
