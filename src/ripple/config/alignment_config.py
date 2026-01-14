@@ -162,6 +162,8 @@ class OptimizationConfig(BaseModelRIPPLE):
 
     Parameters
     ----------
+    enabled: bool
+        Whether to enable sigma optimization. Default is False.
     optimize_algorithm: Literal["nelder-mead", "bayesian"]
         Algorithm to use for sigma optimization. Options are:
         - 'nelder-mead': Nelder-Mead (simplex) method
@@ -187,6 +189,7 @@ class OptimizationConfig(BaseModelRIPPLE):
         Path to save validation history. Default is None.
     """
 
+    enabled: bool = False
     optimize_algorithm: Literal["nelder-mead", "bayesian"] = "bayesian"
     optimize_particle_df_path: str | None = None
     sigma_iterations: PositiveInt = 50

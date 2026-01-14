@@ -1155,33 +1155,23 @@ def _compute_loss(
         assert sigma_d is not None, "sigma_d is required for relion prior"
         assert sigma_v_norm is not None, "sigma_v_norm is required for relion prior"
         assert sigma_a_norm is not None, "sigma_a_norm is required for relion prior"
-        # Convert tensor to float if needed
-        sigma_a_val = (
-            float(sigma_a_norm)
-            if isinstance(sigma_a_norm, torch.Tensor)
-            else sigma_a_norm
-        )
+        # Pass sigma_a_norm directly (can be float or tensor for per-frame values)
         e_space, e_time = relion2019_compute(
             field=deformation_field._data,
             coords=image_coords,
             sigma_d=sigma_d,
             sigma_v=sigma_v_norm,
-            sigma_a=sigma_a_val,
+            sigma_a=sigma_a_norm,
         )
     elif prior_type == "laplacian":
         assert sigma_a_norm is not None, "sigma_a_norm is required for laplacian prior"
         assert alpha_spatial is not None, (
             "alpha_spatial is required for laplacian prior"
         )
-        # Convert tensor to float if needed
-        sigma_a_val = (
-            float(sigma_a_norm)
-            if isinstance(sigma_a_norm, torch.Tensor)
-            else sigma_a_norm
-        )
+        # Pass sigma_a_norm directly (can be float or tensor for per-frame values)
         e_space, e_time = laplacian_compute(
             field=deformation_field._data,
-            sigma_a=sigma_a_val,
+            sigma_a=sigma_a_norm,
             alpha=alpha_spatial,
             spatial_spacing=spatial_spacing,
             temporal_spacing=temporal_spacing,

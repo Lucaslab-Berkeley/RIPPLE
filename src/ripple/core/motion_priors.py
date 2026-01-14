@@ -147,17 +147,17 @@ def _build_physical_coords(
 
 
 def _normalize_sigma_fluence(
-    sigma: float,
+    sigma: float | torch.Tensor,
     total_fluence: float,
     nt: int,
-) -> float:
+) -> float | torch.Tensor:
     """
-    Normalizes sigma_V by the fluence per frame.
+    Normalizes sigma by the fluence per frame.
 
     Parameters
     ----------
-    sigma : float
-        Sigma_V to normalize
+    sigma : float | torch.Tensor
+        Sigma value(s) to normalize. Can be scalar or tensor for per-frame values.
     total_fluence : float
         Total fluence in e-/Å²
     nt : int
@@ -165,8 +165,8 @@ def _normalize_sigma_fluence(
 
     Returns
     -------
-    float
-        Normalized sigma_V
+    float | torch.Tensor
+        Normalized sigma. Returns float if input is float, tensor if input is tensor.
     """
     fluence_per_frame = total_fluence / nt
     return sigma * fluence_per_frame
@@ -359,7 +359,7 @@ def relion2019_e_space(c: torch.Tensor) -> torch.Tensor:
 def relion2019_e_time(
     c: torch.Tensor,
     lam: torch.Tensor,
-    sigma_a: float,
+    sigma_a: float | torch.Tensor,
 ) -> torch.Tensor:
     """
     Temporal smoothness in eigenmode basis.
@@ -615,7 +615,7 @@ def laplacian_e_space(
 
 def laplacian_e_time(
     field: torch.Tensor,
-    sigma_a: float,
+    sigma_a: float | torch.Tensor,
     temporal_spacing: float | None = None,
 ) -> torch.Tensor:
     """
@@ -672,7 +672,7 @@ def relion2019_compute(
     coords: torch.Tensor,
     sigma_d: float,
     sigma_v: float,
-    sigma_a: float,
+    sigma_a: float | torch.Tensor,
     top_k: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
@@ -794,7 +794,7 @@ def separable_compute(
 
 def laplacian_compute(
     field: torch.Tensor,
-    sigma_a: float,
+    sigma_a: float | torch.Tensor,
     alpha: float = 1.0,
     spatial_spacing: tuple[float, float] | None = None,
     temporal_spacing: float | None = None,

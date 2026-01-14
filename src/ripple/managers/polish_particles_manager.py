@@ -166,6 +166,30 @@ class PolishParticlesManager(BaseModelRIPPLE):
                 raise ValueError(
                     "optimization_config must be provided when optimize_sigmas=True"
                 )
+            if not opt_config.enabled:
+                # Optimization config exists but is disabled, skip optimization
+                (
+                    corrected_movie,
+                    updated_deformation_field,
+                    movie_prepared,
+                    trajectory,
+                ) = core_polish_particles(
+                    **core_kwargs,
+                    do_correct_motion=True,
+                    movie_extract=movie_extract,
+                    particle_batch_size=particle_batch_size,
+                    save_intermediate_fields=save_intermediate_fields,
+                    intermediate_fields_dir=intermediate_fields_dir,
+                )
+                manager_utils.save_results(
+                    self.output_config,
+                    self.movie_config,
+                    corrected_movie,
+                    updated_deformation_field,
+                    movie_prepared,
+                    trajectory,
+                )
+                return
 
             # Call core_optimize_sigmas instead
             result = core_optimize_sigmas(
