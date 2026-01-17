@@ -22,6 +22,7 @@ from ripple.utils.data_io import load_template_volume_from_config
 from .core_utils import (
     _create_batch_configs,
     _filter_particles_by_quality,
+    _get_particle_coordinates,
     _make_differentiable_refine_manager,
     get_batch_mean_std_stacks,
 )
@@ -40,7 +41,7 @@ from .prepare_movie import prepare_core
 # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
 def core_polish_particles(
     movie: torch.Tensor,  # (t, H, W)
-    initial_deformation_field: torch.Tensor,
+    initial_deformation_field: torch.Tensor | None,
     refine_config_path: str,
     var_image: torch.Tensor,
     mean_image: torch.Tensor,
@@ -80,7 +81,9 @@ def core_polish_particles(
     sigma_a_amplitude: float = 2.0,
     sigma_a_decay: float = 0.1,
     sigma_a_offset: float = 1.0,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, OptimizationTracker | None]:
+    optimization_mode: Literal["deformation_field", "particle_shifts"] = "deformation_field",
+    initial_particle_shifts: torch.Tensor | None = None,  # (T, N, 2) if mode is particle_shifts
+) -> tuple[torch.Tensor, torch.Tensor | dict[str, torch.Tensor], torch.Tensor, OptimizationTracker | None]:
     """
     Core function for polishing particles.
 
@@ -175,13 +178,22 @@ def core_polish_particles(
         Constant offset in exponential sigma_a formula:
         amplitude*exp(-decay_rate*fluence) + offset. Default is 1.0.
 
+    optimization_mode: Literal["deformation_field", "particle_shifts"]
+        Optimization mode. If "deformation_field", optimizes a deformation field grid.
+        If "particle_shifts", optimizes particle shifts directly (T, N, 2).
+        Default is "deformation_field".
+    initial_particle_shifts: torch.Tensor | None
+        Initial particle shifts with shape (T, N, 2) where T is number of frames
+        and N is number of particles. Only used if optimization_mode is "particle_shifts".
+        If None, initializes to zero shifts.
+
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor, torch.Tensor, OptimizationTracker]
+    tuple[torch.Tensor, torch.Tensor | dict, torch.Tensor, OptimizationTracker | None]
         - Corrected movie (t, H, W)
-        - Updated deformation field (2, nt, nh, nw)
+        - Updated deformation field (2, nt, nh, nw) or dict with "particle_shifts" key
         - Movie prepared (t, H, W)
-        - Optimization trajectory (OptimizationTracker)
+        - Optimization trajectory (OptimizationTracker) or None
     """
     movie_prepared = prepare_core(
         movie,
@@ -215,6 +227,8 @@ def core_polish_particles(
         "best_n": best_n,
         "save_intermediate_fields": save_intermediate_fields,
         "intermediate_fields_dir": intermediate_fields_dir,
+        "optimization_mode": optimization_mode,
+        "initial_particle_shifts": initial_particle_shifts,
     }
     # Prior parameters only for bayesian estimation
     prior_kwargs: dict[str, Any] = {
@@ -232,17 +246,14 @@ def core_polish_particles(
     # estimate the motion
     if loss_trajectories:
         if movie_extract:
-            (
-                updated_deformation_field,
-                trajectory,
-            ) = estimate_local_motion_2dtm_particles_bayesian(
+            result, trajectory = estimate_local_motion_2dtm_particles_bayesian(
                 **estimate_kwargs,
                 **prior_kwargs,
                 particle_batch_size=particle_batch_size,
                 pixel_spacing=pixel_size,
             )
         else:
-            updated_deformation_field, trajectory = estimate_local_motion_2dtm_bayesian(
+            result, trajectory = estimate_local_motion_2dtm_bayesian(
                 **estimate_kwargs,
                 **prior_kwargs,
                 pixel_spacing=pixel_size,
@@ -251,14 +262,14 @@ def core_polish_particles(
             )
     else:
         if movie_extract:
-            updated_deformation_field = estimate_local_motion_2dtm_particles_bayesian(
+            result = estimate_local_motion_2dtm_particles_bayesian(
                 **estimate_kwargs,
                 **prior_kwargs,
                 particle_batch_size=particle_batch_size,
                 pixel_spacing=pixel_size,
             )
         else:
-            updated_deformation_field = estimate_local_motion_2dtm_bayesian(
+            result = estimate_local_motion_2dtm_bayesian(
                 **estimate_kwargs,
                 **prior_kwargs,
                 pixel_spacing=pixel_size,
@@ -266,17 +277,31 @@ def core_polish_particles(
                 voltage=voltage,
             )
         trajectory = None
-    # correct the motion
-    if do_correct_motion:
-        corrected_movie = correct_motion(
-            image=movie_prepared,
-            deformation_grid=updated_deformation_field,
-            pixel_spacing=pixel_size,
-            grid_type=grid_type,
-            device=device,
-        )
-    else:
+
+    # Extract result based on mode
+    if optimization_mode == "particle_shifts":
+        if isinstance(result, dict):
+            updated_particle_shifts = result["particle_shifts"]
+        else:
+            updated_particle_shifts = result
+        # For particle_shifts, we don't correct motion at the movie level
+        # The shifts are applied per-particle during extraction
         corrected_movie = movie_prepared
+        # Return particle_shifts as dict for consistency
+        updated_deformation_field = {"particle_shifts": updated_particle_shifts}
+    else:
+        updated_deformation_field = result
+        # correct the motion
+        if do_correct_motion:
+            corrected_movie = correct_motion(
+                image=movie_prepared,
+                deformation_grid=updated_deformation_field,
+                pixel_spacing=pixel_size,
+                grid_type=grid_type,
+                device=device,
+            )
+        else:
+            corrected_movie = movie_prepared
 
     return corrected_movie, updated_deformation_field, movie_prepared, trajectory
 
@@ -459,6 +484,8 @@ def estimate_local_motion_2dtm_bayesian(
         deformation_field_resolution=deformation_field_resolution,
         pixel_spacing=pixel_spacing,
         device=device,
+        optimization_mode="deformation_field",
+        n_particles=None,
     )
     image_coords = prior_params.get("image_coords")
     sigma_v_norm = prior_params.get("sigma_v_norm")
@@ -545,13 +572,20 @@ def estimate_local_motion_2dtm_bayesian(
             )
 
         # Compute loss with motion priors
+        # Create optimization_var dict for compatibility
+        optimization_var = {
+            "variable": deformation_field,
+            "type": "deformation_field",
+            "data": deformation_field._data,
+        }
         loss = _compute_loss(
             loss_tensor=loss_tensor,
             prior_type=prior_type,
-            deformation_field=deformation_field,
+            optimization_var=optimization_var,
             batch_size=1,
             total_n_particles=1,
             image_coords=image_coords,
+            particle_coords=None,
             sigma_d=sigma_d,
             sigma_v_norm=sigma_v_norm,
             sigma_a_norm=sigma_a_norm,
@@ -624,7 +658,9 @@ def estimate_local_motion_2dtm_particles_bayesian(
     sigma_a_amplitude: float = 2.0,
     sigma_a_decay: float = 0.1,
     sigma_a_offset: float = 1.0,
-) -> torch.Tensor | tuple[torch.Tensor, OptimizationTracker]:
+    optimization_mode: Literal["deformation_field", "particle_shifts"] = "deformation_field",
+    initial_particle_shifts: torch.Tensor | None = None,  # (T, N, 2) if mode is particle_shifts
+) -> torch.Tensor | dict[str, torch.Tensor] | tuple[torch.Tensor, OptimizationTracker] | tuple[dict[str, torch.Tensor], OptimizationTracker]:
     """Estimate motion (new method).
 
     Parameters
@@ -746,10 +782,64 @@ def estimate_local_motion_2dtm_particles_bayesian(
     image = setup_result["image"]
     optimizer_kwargs = setup_result["optimizer_kwargs"]
     trajectory = setup_result["trajectory"]
-    deformation_field = setup_result["deformation_field"]
+
+    # Create batch configs once before optimization loop
+    # This will work with the already-filtered CSV
+    batch_config_paths, batch_particle_indices = _create_batch_configs(
+        refine_config_path=refine_config_path,
+        particle_batch_size=particle_batch_size,
+        temp_dir=temp_dir,
+    )
+
+    # Calculate total number of particles across all batches
+    total_n_particles = sum(len(indices[0]) for indices in batch_particle_indices)
+
+    # Initialize optimization variable based on mode
+    if optimization_mode == "particle_shifts":
+        # Initialize particle_shifts
+        if initial_particle_shifts is None:
+            particle_shifts = torch.zeros(
+                (image.shape[0], total_n_particles, 2),
+                device=device,
+                requires_grad=True,
+            )
+        else:
+            # Ensure it matches the number of particles
+            if initial_particle_shifts.shape[1] != total_n_particles:
+                raise ValueError(
+                    f"initial_particle_shifts shape[1] ({initial_particle_shifts.shape[1]}) "
+                    f"does not match total_n_particles ({total_n_particles})"
+                )
+            particle_shifts = initial_particle_shifts.to(device).requires_grad_(True)
+
+        optimization_var = {
+            "variable": particle_shifts,
+            "type": "particle_shifts",
+            "optimizer_params": [particle_shifts],
+            "data": particle_shifts,
+        }
+
+        # Get particle coordinates for priors
+        refine_manager = _make_differentiable_refine_manager(refine_config_path)
+        particle_stack = refine_manager.particle_stack
+        particle_coords = _get_particle_coordinates(
+            particle_stack=particle_stack,
+            particle_indices=batch_particle_indices,
+            pixel_spacing=pixel_spacing,
+            device=device,
+        )
+    else:  # deformation_field
+        deformation_field = setup_result["deformation_field"]
+        optimization_var = {
+            "variable": deformation_field,
+            "type": "deformation_field",
+            "optimizer_params": deformation_field.parameters(),
+            "data": deformation_field._data,
+        }
+        particle_coords = None
 
     motion_optimizer = torch.optim.Adam(
-        params=deformation_field.parameters(),
+        params=optimization_var["optimizer_params"],
         lr=optimizer_kwargs["lr"],
         betas=(0.9, 0.999),
         eps=1e-08,
@@ -759,14 +849,6 @@ def estimate_local_motion_2dtm_particles_bayesian(
 
     # "Training" loop going over all patched n_iterations times
     pbar = tqdm.tqdm(range(n_iterations))
-
-    # Create batch configs once before optimization loop
-    # This will work with the already-filtered CSV
-    batch_config_paths, batch_particle_indices = _create_batch_configs(
-        refine_config_path=refine_config_path,
-        particle_batch_size=particle_batch_size,
-        temp_dir=temp_dir,
-    )
 
     # Setup prior-specific parameters
     prior_params = _setup_priors(
@@ -779,18 +861,20 @@ def estimate_local_motion_2dtm_particles_bayesian(
         sigma_v=sigma_v,
         image=image,
         fluence_per_frame=fluence_per_frame,
-        deformation_field_resolution=deformation_field_resolution,
+        deformation_field_resolution=deformation_field_resolution if optimization_mode == "deformation_field" else None,
         pixel_spacing=pixel_spacing,
         device=device,
+        optimization_mode=optimization_mode,
+        n_particles=total_n_particles if optimization_mode == "particle_shifts" else None,
     )
     image_coords = prior_params.get("image_coords")
+    # For particle_shifts, update image_coords with particle_coords
+    if optimization_mode == "particle_shifts" and prior_type == "relion":
+        image_coords = particle_coords
     sigma_v_norm = prior_params.get("sigma_v_norm")
     sigma_a_norm = prior_params["sigma_a_norm"]
     spatial_spacing = prior_params.get("spatial_spacing")
     temporal_spacing = prior_params.get("temporal_spacing")
-
-    # Calculate total number of particles across all batches
-    total_n_particles = sum(len(indices[0]) for indices in batch_particle_indices)
     # Pre-compute mean/std stacks for all batches (they don't change across iterations)
     batch_mean_stacks, batch_std_stacks = get_batch_mean_std_stacks(
         batch_config_paths=batch_config_paths,
@@ -802,10 +886,12 @@ def estimate_local_motion_2dtm_particles_bayesian(
     try:
         for iter_idx in pbar:
             if save_intermediate_fields:
-                write_deformation_field_to_csv(
-                    deformation_field.data,
-                    f"{intermediate_fields_dir}/particle_deformation_field_{iter_idx}.csv",
-                )
+                if optimization_mode == "deformation_field":
+                    write_deformation_field_to_csv(
+                        optimization_var["variable"].data,
+                        f"{intermediate_fields_dir}/particle_deformation_field_{iter_idx}.csv",
+                    )
+                # For particle_shifts, could save to CSV if needed
 
             torch.cuda.empty_cache()
 
@@ -825,18 +911,40 @@ def estimate_local_motion_2dtm_particles_bayesian(
                 batch_size = len(batch_indices[0])  # Get size from batch_indices
 
                 # 1. Extract particle images for this batch
-                image_stack_batch = (
-                    batch_particle_stack.construct_image_stack_from_movie(
-                        movie=image,
-                        deformation_field=deformation_field,
-                        pos_reference="top-left",
-                        handle_bounds="pad",
-                        padding_mode="reflect",
-                        padding_value=0.0,
-                        pre_exposure=pre_exposure,
-                        fluence_per_frame=fluence_per_frame,
+                if optimization_mode == "deformation_field":
+                    image_stack_batch = (
+                        batch_particle_stack.construct_image_stack_from_movie(
+                            movie=image,
+                            deformation_field=optimization_var["variable"],
+                            pos_reference="top-left",
+                            handle_bounds="pad",
+                            padding_mode="reflect",
+                            padding_value=0.0,
+                            pre_exposure=pre_exposure,
+                            fluence_per_frame=fluence_per_frame,
+                        )
                     )
-                )
+                else:  # particle_shifts
+                    # Get the particle indices for this batch to slice particle_shifts
+                    batch_start_idx = sum(
+                        len(batch_particle_indices[i][0])
+                        for i in range(batch_config_paths.index(batch_config_path))
+                    )
+                    batch_end_idx = batch_start_idx + batch_size
+                    batch_particle_shifts = optimization_var["variable"][:, batch_start_idx:batch_end_idx, :]
+
+                    image_stack_batch = (
+                        batch_particle_stack.construct_image_stack_from_movie(
+                            movie=image,
+                            particle_shifts=batch_particle_shifts,
+                            pos_reference="top-left",
+                            handle_bounds="pad",
+                            padding_mode="reflect",
+                            padding_value=0.0,
+                            pre_exposure=pre_exposure,
+                            fluence_per_frame=fluence_per_frame,
+                        )
+                    )
 
                 # 2. Reuse pre-computed mean/std stacks
                 batch_mean_stack = batch_mean_stacks[batch_config_path]
@@ -875,13 +983,23 @@ def estimate_local_motion_2dtm_particles_bayesian(
                     )
 
                 # Compute loss with motion priors
+                # For particle_shifts, we need to pass the full shifts tensor
+                # but only compute loss on the batch portion
+                if optimization_mode == "particle_shifts":
+                    # Create a temporary optimization_var dict for this batch
+                    # The priors will operate on the full tensor, which is correct
+                    batch_optimization_var = optimization_var.copy()
+                else:
+                    batch_optimization_var = optimization_var
+
                 batch_loss = _compute_loss(
                     loss_tensor=loss_tensor,
                     prior_type=prior_type,
-                    deformation_field=deformation_field,
+                    optimization_var=batch_optimization_var,
                     batch_size=batch_size,
                     total_n_particles=total_n_particles,
                     image_coords=image_coords,
+                    particle_coords=particle_coords,
                     sigma_d=sigma_d,
                     sigma_v_norm=sigma_v_norm,
                     sigma_a_norm=sigma_a_norm,
@@ -914,24 +1032,39 @@ def estimate_local_motion_2dtm_particles_bayesian(
                 print(f"{iter_idx}: mean cc = {accumulated_loss}")
 
             if trajectory is not None and trajectory.sample_this_step(iter_idx):
-                trajectory.add_checkpoint(
-                    deformation_field=deformation_field.data,
-                    loss=accumulated_loss,
-                    step=iter_idx,
-                )
+                if optimization_mode == "deformation_field":
+                    trajectory.add_checkpoint(
+                        deformation_field=optimization_var["variable"].data,
+                        loss=accumulated_loss,
+                        step=iter_idx,
+                    )
+                else:
+                    # For particle_shifts, could store in trajectory if needed
+                    trajectory.add_checkpoint(
+                        deformation_field=None,  # Not applicable
+                        loss=accumulated_loss,
+                        step=iter_idx,
+                    )
     finally:
         if temp_dir.exists():
             shutil.rmtree(temp_dir)
             print(f"Cleaned up temporary batch configs at {temp_dir}")
 
-    # Return final deformation field
-    final_deformation_field = deformation_field.data
-    average_shift = torch.mean(final_deformation_field, dim=(1, 2, 3), keepdim=True)
-    final_deformation_field = final_deformation_field - average_shift
-
-    if return_trajectory:
-        return final_deformation_field, trajectory
-    return final_deformation_field
+    # Return final result based on mode
+    if optimization_mode == "deformation_field":
+        final_deformation_field = optimization_var["variable"].data
+        average_shift = torch.mean(final_deformation_field, dim=(1, 2, 3), keepdim=True)
+        final_deformation_field = final_deformation_field - average_shift
+        if return_trajectory:
+            return final_deformation_field, trajectory
+        return final_deformation_field
+    else:  # particle_shifts
+        final_particle_shifts = optimization_var["variable"].detach()
+        # Return as dict for consistency
+        result_dict = {"particle_shifts": final_particle_shifts}
+        if return_trajectory:
+            return result_dict, trajectory
+        return result_dict
 
 
 def _setup_estimate_motion(
@@ -1100,10 +1233,11 @@ def _setup_estimate_motion(
 def _compute_loss(
     loss_tensor: torch.Tensor,
     prior_type: str,
-    deformation_field: CubicCatmullRomGrid3d,
+    optimization_var: dict[str, Any],
     batch_size: int,
     total_n_particles: int,
     image_coords: torch.Tensor | None = None,
+    particle_coords: torch.Tensor | None = None,
     sigma_d: float | None = None,
     sigma_v_norm: float | None = None,
     sigma_a_norm: torch.Tensor | float | None = None,
@@ -1119,14 +1253,18 @@ def _compute_loss(
         Loss tensor from refinement.
     prior_type: str
         Type of motion prior: "relion" or "laplacian".
-    deformation_field: CubicCatmullRomGrid3d
-        Deformation field grid.
+    optimization_var: dict[str, Any]
+        Dictionary with keys:
+        - 'type': 'deformation_field' or 'particle_shifts'
+        - 'data': the raw tensor data (deformation_field._data or particle_shifts)
     batch_size: int
         Size of current batch.
     total_n_particles: int
         Total number of particles across all batches.
     image_coords: torch.Tensor | None
-        Physical coordinates for RELION prior. Required if prior_type is "relion".
+        Physical coordinates for RELION prior (for deformation_field).
+    particle_coords: torch.Tensor | None
+        Physical coordinates of particles (for particle_shifts).
     sigma_d: float | None
         Spatial correlation length for RELION prior. Required if prior_type is "relion".
     sigma_v_norm: float | None
@@ -1149,33 +1287,74 @@ def _compute_loss(
         Computed loss value.
     """
     # Compute motion priors
-    e_space = torch.tensor(0.0, device=deformation_field._data.device)
-    e_time = torch.tensor(0.0, device=deformation_field._data.device)
-    if prior_type == "relion":
-        assert sigma_d is not None, "sigma_d is required for relion prior"
-        assert sigma_v_norm is not None, "sigma_v_norm is required for relion prior"
-        assert sigma_a_norm is not None, "sigma_a_norm is required for relion prior"
-        # Pass sigma_a_norm directly (can be float or tensor for per-frame values)
-        e_space, e_time = relion2019_compute(
-            field=deformation_field._data,
-            coords=image_coords,
-            sigma_d=sigma_d,
-            sigma_v=sigma_v_norm,
-            sigma_a=sigma_a_norm,
-        )
-    elif prior_type == "laplacian":
-        assert sigma_a_norm is not None, "sigma_a_norm is required for laplacian prior"
-        assert alpha_spatial is not None, (
-            "alpha_spatial is required for laplacian prior"
-        )
-        # Pass sigma_a_norm directly (can be float or tensor for per-frame values)
-        e_space, e_time = laplacian_compute(
-            field=deformation_field._data,
-            sigma_a=sigma_a_norm,
-            alpha=alpha_spatial,
-            spatial_spacing=spatial_spacing,
-            temporal_spacing=temporal_spacing,
-        )
+    device = optimization_var["data"].device
+    e_space = torch.tensor(0.0, device=device)
+    e_time = torch.tensor(0.0, device=device)
+
+    if optimization_var["type"] == "deformation_field":
+        # Original deformation field case
+        field_data = optimization_var["data"]  # (2, nt, nh, nw)
+
+        if prior_type == "relion":
+            assert sigma_d is not None, "sigma_d is required for relion prior"
+            assert sigma_v_norm is not None, "sigma_v_norm is required for relion prior"
+            assert sigma_a_norm is not None, "sigma_a_norm is required for relion prior"
+            assert image_coords is not None, "image_coords is required for relion prior"
+            e_space, e_time = relion2019_compute(
+                field=field_data,
+                coords=image_coords,
+                sigma_d=sigma_d,
+                sigma_v=sigma_v_norm,
+                sigma_a=sigma_a_norm,
+            )
+        elif prior_type == "laplacian":
+            assert sigma_a_norm is not None, "sigma_a_norm is required for laplacian prior"
+            assert alpha_spatial is not None, (
+                "alpha_spatial is required for laplacian prior"
+            )
+            e_space, e_time = laplacian_compute(
+                field=field_data,
+                sigma_a=sigma_a_norm,
+                alpha=alpha_spatial,
+                spatial_spacing=spatial_spacing,
+                temporal_spacing=temporal_spacing,
+            )
+
+    else:  # particle_shifts
+        # Convert particle_shifts (T, N, 2) to field format (2, T, 1, N)
+        # This matches the expected format where nh=1, nw=N
+        particle_shifts = optimization_var["data"]  # (T, N, 2)
+
+        # Reshape to (2, T, 1, N) to match deformation field format
+        # Permute: (T, N, 2) -> (T, 2, N) -> (2, T, N) -> (2, T, 1, N)
+        field_data = particle_shifts.permute(2, 0, 1).unsqueeze(2)  # (2, T, 1, N)
+
+        if prior_type == "relion":
+            assert sigma_d is not None, "sigma_d is required for relion prior"
+            assert sigma_v_norm is not None, "sigma_v_norm is required for relion prior"
+            assert sigma_a_norm is not None, "sigma_a_norm is required for relion prior"
+            assert particle_coords is not None, (
+                "particle_coords is required for particle_shifts mode with relion prior"
+            )
+            e_space, e_time = relion2019_compute(
+                field=field_data,
+                coords=particle_coords,  # (N, 2) instead of (nh*nw, 2)
+                sigma_d=sigma_d,
+                sigma_v=sigma_v_norm,
+                sigma_a=sigma_a_norm,
+            )
+        elif prior_type == "laplacian":
+            assert sigma_a_norm is not None, "sigma_a_norm is required for laplacian prior"
+            assert alpha_spatial is not None, (
+                "alpha_spatial is required for laplacian prior"
+            )
+            e_space, e_time = laplacian_compute(
+                field=field_data,
+                sigma_a=sigma_a_norm,
+                alpha=alpha_spatial,
+                spatial_spacing=spatial_spacing,
+                temporal_spacing=temporal_spacing,
+            )
 
     e_space = e_space * batch_size / total_n_particles
     e_time = e_time * batch_size / total_n_particles
@@ -1201,9 +1380,11 @@ def _setup_priors(
     sigma_v: float,
     image: torch.Tensor,
     fluence_per_frame: float,
-    deformation_field_resolution: tuple[int, int, int],
+    deformation_field_resolution: tuple[int, int, int] | None,
     pixel_spacing: float,
     device: torch.device,
+    optimization_mode: Literal["deformation_field", "particle_shifts"] = "deformation_field",
+    n_particles: int | None = None,  # pylint: disable=unused-argument
 ) -> dict[str, Any]:
     """Setup prior-specific parameters for motion estimation.
 
@@ -1230,29 +1411,42 @@ def _setup_priors(
         (t, H, W) image tensor.
     fluence_per_frame: float
         Fluence per frame in electrons per pixel.
-    deformation_field_resolution: tuple[int, int, int]
-        Resolution of the deformation field (nt, nh, nw).
+    deformation_field_resolution: tuple[int, int, int] | None
+        Resolution of the deformation field (nt, nh, nw). None for particle_shifts.
     pixel_spacing: float
         Pixel spacing in Angstroms.
     device: torch.device
         Device to perform computation on.
+    optimization_mode: Literal["deformation_field", "particle_shifts"]
+        Optimization mode. Default is "deformation_field".
+    n_particles: int | None
+        Number of particles. Not currently used but kept for API consistency.
 
     Returns
     -------
     dict[str, Any]
         Dictionary containing prior parameters:
         - sigma_A_norm: Normalized sigma_A (always present)
-        - image_coords: Physical coordinates (only for relion prior)
+        - image_coords: Physical coordinates (only for relion prior with deformation_field)
         - sigma_V_norm: Normalized sigma_V (only for relion prior)
         - spatial_spacing: Spatial spacing (only for laplacian prior)
         - temporal_spacing: Temporal spacing (only for laplacian prior)
     """
+    n_frames = image.shape[0]
+    total_fluence = fluence_per_frame * n_frames
+
+    # Determine number of time frames
+    if optimization_mode == "deformation_field":
+        assert deformation_field_resolution is not None
+        nt = deformation_field_resolution[0]
+    else:  # particle_shifts
+        nt = n_frames
+
     # Create fluence-dependent sigma_a if requested
     if sigma_a_exponential:
-        total_fluence = fluence_per_frame * image.shape[0]
         sigma_a_tensor = _create_exponential_sigma_a(
             total_fluence=total_fluence,
-            n_frames=deformation_field_resolution[0],
+            n_frames=nt,
             amplitude=sigma_a_amplitude,
             decay_rate=sigma_a_decay,
             offset=sigma_a_offset,
@@ -1262,45 +1456,60 @@ def _setup_priors(
         sigma_a_tensor = sigma_a
 
     if prior_type == "relion":
-        image_coords = _build_physical_coords(
-            nh=deformation_field_resolution[1],
-            nw=deformation_field_resolution[2],
-            image_shape=image.shape[-2:],
-            pixel_size=pixel_spacing,
-            device=device,
-        )
+        if optimization_mode == "deformation_field":
+            assert deformation_field_resolution is not None
+            image_coords = _build_physical_coords(
+                nh=deformation_field_resolution[1],
+                nw=deformation_field_resolution[2],
+                image_shape=image.shape[-2:],
+                pixel_size=pixel_spacing,
+                device=device,
+            )
+        else:  # particle_shifts
+            # image_coords will be computed from particle positions separately
+            image_coords = None
+
         # Normalize sigma parameters by fluence
         sigma_v_norm = _normalize_sigma_fluence(
             sigma_v,
-            fluence_per_frame * image.shape[0],
-            deformation_field_resolution[0],
+            total_fluence,
+            nt,
         )
         if not sigma_a_exponential:
             sigma_a_norm = _normalize_sigma_fluence(
                 sigma_a,
-                fluence_per_frame * image.shape[0],
-                deformation_field_resolution[0],
+                total_fluence,
+                nt,
             )
         else:
             # Normalize the exponential tensor
             sigma_a_norm = _normalize_sigma_fluence(
                 sigma_a_tensor,
-                fluence_per_frame * image.shape[0],
-                deformation_field_resolution[0],
+                total_fluence,
+                nt,
             )
         return {
             "sigma_a_norm": sigma_a_norm,
-            "image_coords": image_coords,
+            "image_coords": image_coords,  # None for particle_shifts, set separately
             "sigma_v_norm": sigma_v_norm,
         }
     if prior_type == "laplacian":
-        # Compute physical spacing for Laplacian prior
-        spatial_spacing, temporal_spacing = _compute_physical_spacing(
-            image_shape=image.shape[-2:],
-            pixel_size=pixel_spacing,
-            grid_resolution=deformation_field_resolution,
-            total_fluence=fluence_per_frame * image.shape[0],
-        )
+        if optimization_mode == "deformation_field":
+            assert deformation_field_resolution is not None
+            # Compute physical spacing for Laplacian prior
+            spatial_spacing, temporal_spacing = _compute_physical_spacing(
+                image_shape=image.shape[-2:],
+                pixel_size=pixel_spacing,
+                grid_resolution=deformation_field_resolution,
+                total_fluence=total_fluence,
+            )
+        else:  # particle_shifts
+            # For particle_shifts, spatial_spacing is less meaningful
+            # Could compute average particle spacing or use a default
+            # For now, use None and let laplacian_compute handle it
+            spatial_spacing = None
+            temporal_spacing = total_fluence / n_frames if n_frames > 0 else None
+
         # For Laplacian, use sigma_a_tensor directly (no normalization needed)
         sigma_a_norm = sigma_a_tensor
         return {

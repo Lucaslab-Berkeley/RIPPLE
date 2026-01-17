@@ -188,6 +188,9 @@ class PolishParticlesManager(BaseModelRIPPLE):
                     updated_deformation_field,
                     movie_prepared,
                     trajectory,
+                    refine_config_path=self.alignment_config.particle_df_path,
+                    grid_type=self.alignment_config.grid_type,
+                    device=self.computational_config.gpu_id,
                 )
                 return
 
@@ -253,6 +256,9 @@ class PolishParticlesManager(BaseModelRIPPLE):
             updated_deformation_field,
             movie_prepared,
             trajectory,
+            refine_config_path=self.alignment_config.particle_df_path,
+            grid_type=self.alignment_config.grid_type,
+            device=self.computational_config.gpu_id,
         )
 
 

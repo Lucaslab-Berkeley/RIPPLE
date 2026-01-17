@@ -6,6 +6,8 @@ import pandas as pd
 import torch
 import yaml
 from leopard_em.pydantic_models.managers import RefineTemplateManager
+from torch_cubic_spline_grids import CubicCatmullRomGrid3d
+from torch_grid_utils import coordinate_grid
 
 
 def get_batch_mean_std_stacks(
@@ -287,3 +289,177 @@ def _make_differentiable_refine_manager(
     # override the movie_params here
     refine_manager.movie_config.enabled = False
     return refine_manager
+
+
+def _get_particle_coordinates(
+    particle_stack,
+    particle_indices: list[pd.Index],
+    pixel_spacing: float,
+    device: torch.device,
+) -> torch.Tensor:
+    """Get physical coordinates of particles in Angstroms.
+
+    Parameters
+    ----------
+    particle_stack
+        Particle stack from refine manager
+    particle_indices: list[pd.Index]
+        List of particle indices (one per batch)
+    pixel_spacing: float
+        Pixel spacing in Angstroms
+    device: torch.device
+        Device for tensors
+
+    Returns
+    -------
+    torch.Tensor
+        (N, 2) coordinates in Angstroms where N is total number of particles
+    """
+    # Get position columns
+    y_col, x_col = particle_stack._get_position_reference_columns()
+
+    # Get all particle indices across batches
+    all_indices = []
+    for batch_indices in particle_indices:
+        # batch_indices is a list with one pd.Index
+        batch_df_indices = particle_stack._df.index[batch_indices[0]].tolist()
+        all_indices.extend(batch_df_indices)
+
+    # Get positions in pixels
+    pos_y_px = particle_stack._df.loc[all_indices, y_col].to_numpy()
+    pos_x_px = particle_stack._df.loc[all_indices, x_col].to_numpy()
+
+    # Convert to Angstroms
+    pos_y_angstrom = torch.tensor(pos_y_px * pixel_spacing, device=device)
+    pos_x_angstrom = torch.tensor(pos_x_px * pixel_spacing, device=device)
+
+    # Stack into (N, 2) coordinates
+    coords = torch.stack([pos_y_angstrom, pos_x_angstrom], dim=-1)
+    return coords
+
+
+def compute_particle_shifts(
+    deformation_field: torch.Tensor,  # (2, nt, nh, nw)
+    movie: torch.Tensor,  # (t, H, W)
+    refine_config_path: str,
+    pixel_spacing: float,
+    grid_type: str = "catmull_rom",
+    device: torch.device | None = None,
+) -> pd.DataFrame:
+    """
+    Compute particle shifts from deformation field.
+
+    Parameters
+    ----------
+    deformation_field : torch.Tensor
+        Final deformation field with shape (2, nt, nh, nw) where 2 corresponds
+        to (y, x) shifts.
+    movie : torch.Tensor
+        Movie tensor with shape (t, H, W) where t is number of frames.
+    refine_config_path : str
+        Path to the refine config YAML file.
+    pixel_spacing : float
+        Pixel spacing in Angstroms.
+    grid_type : str
+        Grid type to use for the deformation field. Must be 'catmull_rom' or 'bspline'.
+        Default is 'catmull_rom'.
+    device : torch.device | None
+        Device to perform computation on. If None, uses the device of the input tensors.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with columns: particle_index, frame, y_shift, x_shift.
+    """
+    if device is None:
+        device = deformation_field.device
+
+    # Convert deformation field tensor to grid
+    if grid_type == "catmull_rom":
+        deformation_field_grid = CubicCatmullRomGrid3d.from_grid_data(
+            deformation_field
+        ).to(device)
+    else:
+        raise ValueError(
+            f"Unsupported grid_type: {grid_type}. "
+            "Only 'catmull_rom' is currently supported."
+        )
+
+    # Get particle stack from refine manager
+    refine_manager = _make_differentiable_refine_manager(refine_config_path)
+    particle_stack = refine_manager.particle_stack
+
+    # Get particle positions and other parameters
+    pixel_sizes = particle_stack.get_pixel_size()
+    y_col, x_col = particle_stack._get_position_reference_columns()
+    h, w = particle_stack.original_template_size
+
+    # Get all particle indices
+    particle_indices = particle_stack._df.index.tolist()
+
+    # Get positions
+    pos_y = particle_stack._df.loc[particle_indices, y_col].to_numpy()
+    pos_x = particle_stack._df.loc[particle_indices, x_col].to_numpy()
+
+    # Convert to center positions
+    # (as used in compute_frame_particle_shifts_from_deformation)
+    pos_y_center = pos_y + h // 2
+    pos_x_center = pos_x + w // 2
+    pos_y_center = torch.tensor(pos_y_center, device=device, dtype=torch.float32)
+    pos_x_center = torch.tensor(pos_x_center, device=device, dtype=torch.float32)
+
+    # Get deformation field grid dimensions
+    _, _, gh, gw = deformation_field.shape
+
+    # Create pixel grid
+    t, img_h, img_w = movie.shape
+    pixel_grid = coordinate_grid(
+        image_shape=(img_h, img_w),
+        device=device,
+    )
+
+    # Normalized time values for each frame
+    normalized_t = torch.linspace(0, 1, steps=t, device=device)
+
+    # Prepare data for CSV
+    rows = []
+
+    # Get pixel spacing (handle both scalar and array cases)
+    if hasattr(pixel_sizes, "__len__") and len(pixel_sizes) > 0:
+        pixel_spacing_to_use = pixel_sizes[0].item()
+    else:
+        pixel_spacing_to_use = pixel_spacing
+
+    # Process each frame
+    for frame_idx, movie_frame in enumerate(movie):
+        normalized_t_value = normalized_t[frame_idx]
+
+        # Compute shifts for all particles in this frame
+        # Use the particle stack's method
+        shifts = particle_stack.compute_frame_particle_shifts_from_deformation(
+            movie_frame=movie_frame.to(device),
+            deformation_field=deformation_field_grid,
+            normalized_t_value=normalized_t_value,
+            pixel_grid=pixel_grid,
+            pixel_spacing=pixel_spacing_to_use,
+            pos_y_center=pos_y_center,
+            pos_x_center=pos_x_center,
+            gh=gh,
+            gw=gw,
+        )
+
+        # Convert shifts to numpy and add to rows
+        shifts_np = shifts.cpu().numpy()  # (N, 2) as (dy, dx)
+        for particle_idx, (y_shift, x_shift) in enumerate(shifts_np):
+            # Use the actual particle index from the dataframe
+            particle_index = particle_indices[particle_idx]
+            rows.append({
+                "particle_index": particle_index,
+                "frame": frame_idx,
+                "y_shift": float(y_shift),
+                "x_shift": float(x_shift),
+            })
+
+    # Create DataFrame and return
+    df = pd.DataFrame(rows)
+    return df

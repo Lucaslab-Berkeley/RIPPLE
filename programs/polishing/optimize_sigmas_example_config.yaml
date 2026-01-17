@@ -137,6 +137,8 @@ alignment_config:
   # If provided, sigma hyperparameters will be optimized using a validation template
   # If omitted (set to null), optimization will be disabled
   optimization_config:
+
+    enabled: false
     # Sigma optimization algorithm: "nelder-mead" or "bayesian" (default: "bayesian")
     optimize_algorithm: "bayesian"
     

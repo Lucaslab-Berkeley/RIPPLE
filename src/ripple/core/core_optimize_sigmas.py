@@ -24,6 +24,7 @@ from ripple.utils.data_io import (
 from .core_utils import (
     _create_batch_configs,
     _filter_particles_by_quality,
+    _get_particle_coordinates,
     _make_differentiable_refine_manager,
     get_batch_mean_std_stacks,
 )
@@ -1545,9 +1546,11 @@ def _setup_prior_params(
     sigma_params: dict[str, Any],
     image: torch.Tensor,
     pixel_spacing: float,
-    deformation_field_resolution: tuple[int, int, int],
+    deformation_field_resolution: tuple[int, int, int] | None,
     fluence_per_frame: float,
     device: torch.device,
+    optimization_mode: Literal["deformation_field", "particle_shifts"] = "deformation_field",
+    n_particles: int | None = None,  # pylint: disable=unused-argument
 ) -> dict[str, Any]:
     """Set up prior parameters based on prior type.
 
@@ -1610,7 +1613,7 @@ def _setup_prior_params(
             offset = offset.item() if isinstance(offset, torch.Tensor) else offset
             sigma_a_tensor = _create_exponential_sigma_a(
                 fluence_per_frame * image.shape[0],
-                deformation_field_resolution[0],
+                nt,
                 amplitude=amplitude,
                 decay_rate=decay_rate,
                 offset=offset,
@@ -2007,7 +2010,10 @@ def _run_inner_optimization_common(
     prior_type: str,
     sigma_params: dict[str, Any],
     sigma_a_exponential: bool,
-) -> tuple[CubicCatmullRomGrid3d, float]:
+    optimization_mode: Literal["deformation_field", "particle_shifts"] = "deformation_field",
+    initial_particle_shifts: torch.Tensor | None = None,
+    refine_config_path: str | None = None,
+) -> tuple[CubicCatmullRomGrid3d | dict[str, torch.Tensor], float]:
     """Run inner motion optimization loop with current sigma parameters.
 
     Parameters
@@ -2087,10 +2093,15 @@ def _run_inner_optimization_common(
         sigma_params=sigma_params,
         image=image,
         pixel_spacing=pixel_spacing,
-        deformation_field_resolution=deformation_field_resolution,
+        deformation_field_resolution=deformation_field_resolution if optimization_mode == "deformation_field" else None,
         fluence_per_frame=fluence_per_frame,
         device=device,
+        optimization_mode=optimization_mode,
+        n_particles=total_n_particles if optimization_mode == "particle_shifts" else None,
     )
+    # For particle_shifts with RELION prior, update image_coords with particle_coords
+    if optimization_mode == "particle_shifts" and prior_type == "relion":
+        prior_params["image_coords"] = particle_coords
 
     # Inner loop: motion optimization
     accumulated_loss = 0.0
@@ -2119,16 +2130,43 @@ def _run_inner_optimization_common(
                 )
             batch_particle_stack = batch_refine_manager.particle_stack
 
-            image_stack_batch = batch_particle_stack.construct_image_stack_from_movie(
-                movie=image,
-                deformation_field=deformation_field,
-                pos_reference="top-left",
-                handle_bounds="pad",
-                padding_mode="reflect",
-                padding_value=0.0,
-                pre_exposure=pre_exposure,
-                fluence_per_frame=fluence_per_frame,
-            )
+            # Extract particle images based on optimization mode
+            if optimization_mode == "deformation_field":
+                image_stack_batch = (
+                    batch_particle_stack.construct_image_stack_from_movie(
+                        movie=image,
+                        deformation_field=optimization_var["variable"],
+                        pos_reference="top-left",
+                        handle_bounds="pad",
+                        padding_mode="reflect",
+                        padding_value=0.0,
+                        pre_exposure=pre_exposure,
+                        fluence_per_frame=fluence_per_frame,
+                    )
+                )
+            else:  # particle_shifts
+                # Get the particle indices for this batch to slice particle_shifts
+                batch_start_idx = sum(
+                    len(batch_particle_indices[i][0])
+                    for i in range(batch_config_paths.index(batch_config_path))
+                )
+                batch_end_idx = batch_start_idx + batch_size
+                batch_particle_shifts = optimization_var["variable"][
+                    :, batch_start_idx:batch_end_idx, :
+                ]
+
+                image_stack_batch = (
+                    batch_particle_stack.construct_image_stack_from_movie(
+                        movie=image,
+                        particle_shifts=batch_particle_shifts,
+                        pos_reference="top-left",
+                        handle_bounds="pad",
+                        padding_mode="reflect",
+                        padding_value=0.0,
+                        pre_exposure=pre_exposure,
+                        fluence_per_frame=fluence_per_frame,
+                    )
+                )
 
             # Reuse pre-computed mean/std stacks
             batch_mean_stack = batch_mean_stacks[batch_config_path]
@@ -2152,18 +2190,31 @@ def _run_inner_optimization_common(
                 else result["refined_cross_correlation"]
             )
 
+            # Compute priors based on optimization mode
+            if optimization_mode == "deformation_field":
+                field_data = optimization_var["data"]
+            else:  # particle_shifts
+                # Convert particle_shifts (T, N, 2) to field format (2, T, 1, N)
+                particle_shifts = optimization_var["data"]  # (T, N, 2)
+                field_data = particle_shifts.permute(2, 0, 1).unsqueeze(2)  # (2, T, 1, N)
+
             if prior_type == "laplacian":
                 e_space, e_time = laplacian_compute(
-                    deformation_field._data,
+                    field_data,
                     prior_params["sigma_a_tensor"],
                     prior_params["alpha"],
                     prior_params["spatial_spacing"],
                     prior_params["temporal_spacing"],
                 )
-            else:
+            else:  # relion
+                coords = (
+                    particle_coords
+                    if optimization_mode == "particle_shifts"
+                    else prior_params["image_coords"]
+                )
                 e_space, e_time = relion2019_compute(
-                    deformation_field._data,
-                    prior_params["image_coords"],
+                    field_data,
+                    coords,
                     prior_params["sigma_d_val"],
                     prior_params["sigma_v_norm"],
                     prior_params["sigma_a_norm"],
@@ -2201,24 +2252,42 @@ def _run_inner_optimization_common(
             gc.collect()
             torch.cuda.empty_cache()
 
-    # Detach and clone the final deformation field to break computation graph
-    final_deformation_data = deformation_field.data.detach().clone()
+    # Return final result based on mode
+    if optimization_mode == "deformation_field":
+        # Detach and clone the final deformation field to break computation graph
+        final_deformation_data = optimization_var["variable"].data.detach().clone()
 
-    # Clean up optimizer
-    del motion_optimizer, deformation_field_data, deformation_field
-    if prior_type == "laplacian":
-        if isinstance(prior_params["sigma_a_tensor"], torch.Tensor):
-            del prior_params["sigma_a_tensor"]
-    else:
-        del prior_params["image_coords"]
-        if isinstance(prior_params["sigma_a_norm"], torch.Tensor):
-            del prior_params["sigma_a_norm"]
+        # Clean up optimizer
+        del motion_optimizer, optimization_var
+        if prior_type == "laplacian":
+            if isinstance(prior_params["sigma_a_tensor"], torch.Tensor):
+                del prior_params["sigma_a_tensor"]
+        else:
+            del prior_params["image_coords"]
+            if isinstance(prior_params["sigma_a_norm"], torch.Tensor):
+                del prior_params["sigma_a_norm"]
 
-    gc.collect()
-    torch.cuda.empty_cache()
+        gc.collect()
+        torch.cuda.empty_cache()
 
-    deformation_field_clean = CubicCatmullRomGrid3d.from_grid_data(
-        final_deformation_data
-    ).to(device)
+        deformation_field_clean = CubicCatmullRomGrid3d.from_grid_data(
+            final_deformation_data
+        ).to(device)
 
-    return deformation_field_clean, accumulated_loss
+        return deformation_field_clean, accumulated_loss
+    else:  # particle_shifts
+        final_particle_shifts = optimization_var["variable"].detach().clone()
+
+        # Clean up optimizer
+        del motion_optimizer, optimization_var
+        if prior_type == "laplacian":
+            if isinstance(prior_params["sigma_a_tensor"], torch.Tensor):
+                del prior_params["sigma_a_tensor"]
+        else:
+            if isinstance(prior_params["sigma_a_norm"], torch.Tensor):
+                del prior_params["sigma_a_norm"]
+
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        return {"particle_shifts": final_particle_shifts}, accumulated_loss

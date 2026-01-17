@@ -46,6 +46,7 @@ class OutputConfig(BaseModelRIPPLE):
     rendered_movie_output_path: str | None = None
     non_dw_sum_output_path: str | None = None
     loss_trajectories_output_path: str | None = None
+    particle_shift_path: str | None = None
 
     @model_validator(mode="after")  # type: ignore
     def validate_paths(self) -> Self:
@@ -72,6 +73,7 @@ class OutputConfig(BaseModelRIPPLE):
             self.rendered_movie_output_path,
             self.non_dw_sum_output_path,
             self.loss_trajectories_output_path,
+            self.particle_shift_path,
         ]
         for path in paths:
             check_file_path_and_permissions(path, self.allow_file_overwrite)

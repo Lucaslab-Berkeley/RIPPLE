@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Optional
 import torch
 
 from ripple.core import generate_dose_weighted_image, sum_movie
+from ripple.core.core_utils import compute_particle_shifts
 from ripple.utils.data_io import (
     save_deformation_field,
     write_mrc_from_tensor,
@@ -99,6 +100,9 @@ def save_results(
     updated_deformation_field: torch.Tensor,
     movie_prepared: torch.Tensor,
     trajectory: Optional["OptimizationTracker"] = None,
+    refine_config_path: str | None = None,
+    grid_type: str = "catmull_rom",
+    device: torch.device | None = None,
 ) -> None:
     """
     Save the results of the alignment.
@@ -117,6 +121,13 @@ def save_results(
         The prepared movie.
     trajectory: Optional[OptimizationTracker]
         The trajectory of the alignment.
+    refine_config_path: str | None
+        Path to refine config YAML file. Required for particle shift computation.
+    grid_type: str
+        Grid type used for deformation field ('catmull_rom' or 'bspline').
+        Default is 'catmull_rom'.
+    device: torch.device | None
+        Device to use for computations. If None, uses the device of input tensors.
 
     Returns
     -------
@@ -182,3 +193,27 @@ def save_results(
                 trajectory=trajectory,
                 file_path=output_config.loss_trajectories_output_path,
             )
+
+    # Save particle shifts if wanted (only for polishing with particles)
+    if output_config.particle_shift_path is not None:
+        if refine_config_path is None:
+            raise ValueError(
+                "particle_shift_path is specified but refine_config_path is not "
+                "provided. Particle shifts can only be computed when polishing "
+                "particles."
+            )
+        # Use the original movie (before correction) to compute shifts
+        # since we want the shifts that were applied during correction
+        particle_shifts_df = compute_particle_shifts(
+            deformation_field=updated_deformation_field,
+            movie=movie_prepared,
+            refine_config_path=refine_config_path,
+            pixel_spacing=movie_config.pixel_size,
+            grid_type=grid_type,
+            device=device,
+        )
+        # Save to CSV
+        particle_shifts_df.to_csv(
+            output_config.particle_shift_path,
+            index=False,
+        )
