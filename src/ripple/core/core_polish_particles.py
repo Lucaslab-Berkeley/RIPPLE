@@ -949,31 +949,6 @@ def estimate_local_motion_2dtm_particles_bayesian(
     # Use try-finally to ensure cleanup of temp directory
     try:
         for iter_idx in pbar:
-            # Save particle shifts at start of each iteration for debugging
-            if optimization_mode == "particle_shifts":
-                particle_shifts = optimization_var["variable"]  # (T, N, 2)
-                # Convert to DataFrame format
-                particle_shifts_np = particle_shifts.detach().cpu().numpy()
-                T, N, _ = particle_shifts_np.shape
-                rows = []
-                for frame_idx in range(T):
-                    for particle_idx in range(N):
-                        y_shift = float(particle_shifts_np[frame_idx, particle_idx, 0])
-                        x_shift = float(particle_shifts_np[frame_idx, particle_idx, 1])
-                        rows.append({
-                            "particle_index": particle_idx,
-                            "frame": frame_idx,
-                            "y_shift": y_shift,
-                            "x_shift": x_shift,
-                        })
-                particle_shifts_df = pd.DataFrame(rows)
-                # Save to CSV
-                Path(intermediate_fields_dir).mkdir(parents=True, exist_ok=True)
-                particle_shifts_df.to_csv(
-                    f"{intermediate_fields_dir}/particle_shifts_iter_{iter_idx}.csv",
-                    index=False,
-                )
-
             if save_intermediate_fields:
                 if optimization_mode == "deformation_field":
                     write_deformation_field_to_csv(
@@ -1463,6 +1438,7 @@ def _compute_loss(
     loss = e_obs + (e_space + e_time)
     print(f"e_obs: {e_obs.item()}")
     print(f"e_space: {e_space.item()}")
+    print(f"e_time: {e_time.item()}")
     return loss
 
 

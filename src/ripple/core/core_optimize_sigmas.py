@@ -39,6 +39,47 @@ from .motion_priors import (
 )
 
 
+def _check_convergence(
+    loss_history: list[float],
+    convergence_threshold: float,
+    num_convergence_iterations: int,
+) -> tuple[bool, list[float]]:
+    """Check if optimization has converged based on loss history.
+
+    Parameters
+    ----------
+    loss_history : list[float]
+        List of loss values from recent iterations.
+    convergence_threshold : float
+        Threshold for absolute change in loss to consider converged.
+    num_convergence_iterations : int
+        Number of consecutive iterations where change must be below threshold.
+
+    Returns
+    -------
+    tuple[bool, list[float]]
+        (converged, trimmed_loss_history)
+    """
+    min_history_len = num_convergence_iterations + 1
+    if len(loss_history) < min_history_len:
+        return False, loss_history
+
+    # Check if absolute change has been less than threshold
+    # for the last num_convergence_iterations consecutive iterations
+    converged = True
+    hist_len = len(loss_history)
+    start_idx = hist_len - num_convergence_iterations
+    for j in range(start_idx, hist_len - 1):
+        abs_change = abs(loss_history[j + 1] - loss_history[j])
+        if abs_change > convergence_threshold:
+            converged = False
+            break
+
+    # Keep only last (num_convergence_iterations + 1) values for efficiency
+    trimmed_history = loss_history[-min_history_len:]
+    return converged, trimmed_history
+
+
 # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
 def core_optimize_sigmas(
     optimize_algorithm: Literal["nelder-mead", "bayesian"],
@@ -86,6 +127,11 @@ def core_optimize_sigmas(
     validation_history_output_path: str | None = None,
     optimization_mode: Literal["deformation_field", "particle_shifts"] = "deformation_field",
     initial_particle_shifts: torch.Tensor | None = None,
+    optimizer_type: Literal["adam", "lbfgs"] = "adam",
+    lbfgs_max_eval: int = 5,
+    lbfgs_line_search_fn: str | None = "strong_wolfe",
+    convergence_threshold: float = 0.0005,
+    num_convergence_iterations: int = 5,
 ) -> dict[str, Any]:
     """Dispatcher function to run the appropriate sigma optimization algorithm.
 
@@ -189,6 +235,16 @@ def core_optimize_sigmas(
         Initial particle shifts with shape (T, N, 2) where T is number of frames
         and N is number of particles. Only used if optimization_mode is "particle_shifts".
         If None, initializes to zero shifts. Default is None.
+    optimizer_type : Literal["adam", "lbfgs"]
+        Optimizer type for inner motion optimization loop. Default is "adam".
+    lbfgs_max_eval : int
+        Maximum number of function evaluations per L-BFGS iteration. Default is 5.
+    lbfgs_line_search_fn : str | None
+        Line search function for L-BFGS. Default is "strong_wolfe".
+    convergence_threshold : float
+        Threshold for absolute change in loss to consider converged. Default is 0.0005.
+    num_convergence_iterations : int
+        Number of consecutive iterations where change must be below threshold. Default is 5.
 
     Returns
     -------
@@ -242,6 +298,11 @@ def core_optimize_sigmas(
         "validation_history_output_path": validation_history_output_path,
         "optimization_mode": optimization_mode,
         "initial_particle_shifts": initial_particle_shifts,
+        "optimizer_type": optimizer_type,
+        "lbfgs_max_eval": lbfgs_max_eval,
+        "lbfgs_line_search_fn": lbfgs_line_search_fn,
+        "convergence_threshold": convergence_threshold,
+        "num_convergence_iterations": num_convergence_iterations,
     }
 
     if optimize_algorithm == "nelder-mead":
@@ -306,6 +367,11 @@ def optimize_sigmas_2dtm_nelder_mead(
     validation_history_output_path: str | None = None,
     optimization_mode: Literal["deformation_field", "particle_shifts"] = "deformation_field",
     initial_particle_shifts: torch.Tensor | None = None,
+    optimizer_type: Literal["adam", "lbfgs"] = "adam",
+    lbfgs_max_eval: int = 5,
+    lbfgs_line_search_fn: str | None = "strong_wolfe",
+    convergence_threshold: float = 0.0005,
+    num_convergence_iterations: int = 5,
 ) -> dict[str, Any]:
     """Optimize prior hyperparameters using Nelder-Mead method.
 
@@ -405,6 +471,16 @@ def optimize_sigmas_2dtm_nelder_mead(
         Path to save training loss history as JSON. Default None
     validation_history_output_path : str | None
         Path to save validation loss history as JSON. Default None
+    optimizer_type : Literal["adam", "lbfgs"]
+        Optimizer type for inner motion optimization loop. Default is "adam".
+    lbfgs_max_eval : int
+        Maximum number of function evaluations per L-BFGS iteration. Default is 5.
+    lbfgs_line_search_fn : str | None
+        Line search function for L-BFGS. Default is "strong_wolfe".
+    convergence_threshold : float
+        Threshold for absolute change in loss to consider converged. Default is 0.0005.
+    num_convergence_iterations : int
+        Number of consecutive iterations where change must be below threshold. Default is 5.
 
     Returns
     -------
@@ -545,6 +621,11 @@ def optimize_sigmas_2dtm_nelder_mead(
             optimization_mode=optimization_mode,
             initial_particle_shifts=initial_particle_shifts,
             refine_config_path=refine_config_path,
+            optimizer_type=optimizer_type,
+            lbfgs_max_eval=lbfgs_max_eval,
+            lbfgs_line_search_fn=lbfgs_line_search_fn,
+            convergence_threshold=convergence_threshold,
+            num_convergence_iterations=num_convergence_iterations,
         )
 
         # Compute validation loss
@@ -688,6 +769,11 @@ def optimize_sigmas_2dtm_nelder_mead(
             optimization_mode=optimization_mode,
             initial_particle_shifts=initial_particle_shifts,
             refine_config_path=refine_config_path,
+            optimizer_type=optimizer_type,
+            lbfgs_max_eval=lbfgs_max_eval,
+            lbfgs_line_search_fn=lbfgs_line_search_fn,
+            convergence_threshold=convergence_threshold,
+            num_convergence_iterations=num_convergence_iterations,
         )
         # Handle return value - can be dict with particle_shifts or deformation_field
         if isinstance(deformation_field, dict):
@@ -862,6 +948,11 @@ def optimize_sigmas_2dtm_optuna(
     validation_history_output_path: str | None = None,
     optimization_mode: Literal["deformation_field", "particle_shifts"] = "deformation_field",
     initial_particle_shifts: torch.Tensor | None = None,
+    optimizer_type: Literal["adam", "lbfgs"] = "adam",
+    lbfgs_max_eval: int = 5,
+    lbfgs_line_search_fn: str | None = "strong_wolfe",
+    convergence_threshold: float = 0.0005,
+    num_convergence_iterations: int = 5,
 ) -> dict[str, Any]:
     """Optimize prior hyperparameters using Optuna (Bayesian optimization).
 
@@ -989,6 +1080,16 @@ def optimize_sigmas_2dtm_optuna(
         Initial particle shifts with shape (T, N, 2) where T is number of frames
         and N is number of particles. Only used if optimization_mode is "particle_shifts".
         If None, initializes to zero shifts. Default is None.
+    optimizer_type : Literal["adam", "lbfgs"]
+        Optimizer type for inner motion optimization loop. Default is "adam".
+    lbfgs_max_eval : int
+        Maximum number of function evaluations per L-BFGS iteration. Default is 5.
+    lbfgs_line_search_fn : str | None
+        Line search function for L-BFGS. Default is "strong_wolfe".
+    convergence_threshold : float
+        Threshold for absolute change in loss to consider converged. Default is 0.0005.
+    num_convergence_iterations : int
+        Number of consecutive iterations where change must be below threshold. Default is 5.
 
     Returns
     -------
@@ -1129,6 +1230,11 @@ def optimize_sigmas_2dtm_optuna(
             optimization_mode=optimization_mode,
             initial_particle_shifts=initial_particle_shifts,
             refine_config_path=refine_config_path,
+            optimizer_type=optimizer_type,
+            lbfgs_max_eval=lbfgs_max_eval,
+            lbfgs_line_search_fn=lbfgs_line_search_fn,
+            convergence_threshold=convergence_threshold,
+            num_convergence_iterations=num_convergence_iterations,
         )
 
         # Compute validation loss
@@ -1259,6 +1365,11 @@ def optimize_sigmas_2dtm_optuna(
             optimization_mode=optimization_mode,
             initial_particle_shifts=initial_particle_shifts,
             refine_config_path=refine_config_path,
+            optimizer_type=optimizer_type,
+            lbfgs_max_eval=lbfgs_max_eval,
+            lbfgs_line_search_fn=lbfgs_line_search_fn,
+            convergence_threshold=convergence_threshold,
+            num_convergence_iterations=num_convergence_iterations,
         )
         # Handle return value - can be dict with particle_shifts or deformation_field
         if isinstance(deformation_field, dict):
@@ -2113,6 +2224,11 @@ def _run_inner_optimization_common(
     optimization_mode: Literal["deformation_field", "particle_shifts"] = "deformation_field",
     initial_particle_shifts: torch.Tensor | None = None,
     refine_config_path: str | None = None,
+    optimizer_type: Literal["adam", "lbfgs"] = "adam",
+    lbfgs_max_eval: int = 5,
+    lbfgs_line_search_fn: str | None = "strong_wolfe",
+    convergence_threshold: float = 0.0005,
+    num_convergence_iterations: int = 5,
 ) -> tuple[CubicCatmullRomGrid3d | dict[str, torch.Tensor], float]:
     """Run inner motion optimization loop with current sigma parameters.
 
@@ -2158,6 +2274,16 @@ def _run_inner_optimization_common(
         Dictionary of sigma parameters (values can be float or torch.Tensor)
     sigma_a_exponential : bool
         Whether to use exponential sigma_a
+    optimizer_type : Literal["adam", "lbfgs"]
+        Optimizer type for inner motion optimization loop. Default is "adam".
+    lbfgs_max_eval : int
+        Maximum number of function evaluations per L-BFGS iteration. Default is 5.
+    lbfgs_line_search_fn : str | None
+        Line search function for L-BFGS. Default is "strong_wolfe".
+    convergence_threshold : float
+        Threshold for absolute change in loss to consider converged. Default is 0.0005.
+    num_convergence_iterations : int
+        Number of consecutive iterations where change must be below threshold. Default is 5.
 
     Returns
     -------
@@ -2244,9 +2370,18 @@ def _run_inner_optimization_common(
             "data": deformation_field._data,
         }
 
-    motion_optimizer = torch.optim.Adam(
-        params=optimization_var["optimizer_params"], lr=optimizer_kwargs["lr"]
-    )
+    # Initialize optimizer based on type
+    if optimizer_type == "lbfgs":
+        motion_optimizer = torch.optim.LBFGS(
+            params=optimization_var["optimizer_params"],
+            lr=optimizer_kwargs["lr"],
+            max_eval=lbfgs_max_eval,
+            line_search_fn=lbfgs_line_search_fn,
+        )
+    else:  # adam
+        motion_optimizer = torch.optim.Adam(
+            params=optimization_var["optimizer_params"], lr=optimizer_kwargs["lr"]
+        )
 
     # Setup prior params
     prior_params = _setup_prior_params(
@@ -2294,167 +2429,350 @@ def _run_inner_optimization_common(
 
     # Inner loop: motion optimization
     accumulated_loss = 0.0
-    for iter_idx in range(motion_iterations):
-        print(f"  Inner iteration: {iter_idx + 1}/{motion_iterations}")
-        motion_optimizer.zero_grad()
-        batch_accumulated_loss = 0.0
+    loss_history = []  # For convergence checking (L-BFGS only)
 
-        for batch_idx, (batch_config_path, batch_indices) in enumerate(
-            zip(batch_config_paths, batch_particle_indices, strict=True)
-        ):
-            batch_size = len(batch_indices[0])
-            batch_refine_manager = _make_differentiable_refine_manager(
-                batch_config_path
-            )
-            if iter_idx == 0:  # Only print batch info on first iteration
-                # Get actual number of particles from the stack
-                actual_particle_count = (
-                    batch_refine_manager.particle_stack.num_particles
-                )
-                print(
-                    f"    Training batch {batch_idx + 1}: "
-                    f"indices={batch_size}, "
-                    f"actual={actual_particle_count}, "
-                    f"config={Path(batch_config_path).name}"
-                )
-            batch_particle_stack = batch_refine_manager.particle_stack
-
-            # Extract particle images based on optimization mode
-            if optimization_mode == "deformation_field":
-                image_stack_batch = (
-                    batch_particle_stack.construct_image_stack_from_movie(
-                        movie=image,
-                        deformation_field=optimization_var["variable"],
-                        pos_reference="top-left",
-                        handle_bounds="pad",
-                        padding_mode="reflect",
-                        padding_value=0.0,
-                        pre_exposure=pre_exposure,
-                        fluence_per_frame=fluence_per_frame,
-                    )
-                )
-            else:  # particle_shifts
-                # Get the particle indices for this batch to slice particle_shifts
-                batch_start_idx = sum(
-                    len(batch_particle_indices[i][0])
-                    for i in range(batch_config_paths.index(batch_config_path))
-                )
-                batch_end_idx = batch_start_idx + batch_size
-                batch_particle_shifts = optimization_var["variable"][
-                    :, batch_start_idx:batch_end_idx, :
-                ]
-
-                image_stack_batch = (
-                    batch_particle_stack.construct_image_stack_from_movie(
-                        movie=image,
-                        particle_shifts=batch_particle_shifts,
-                        pos_reference="top-left",
-                        handle_bounds="pad",
-                        padding_mode="reflect",
-                        padding_value=0.0,
-                        pre_exposure=pre_exposure,
-                        fluence_per_frame=fluence_per_frame,
-                    )
-                )
-
-            # Reuse pre-computed mean/std stacks
-            batch_mean_stack = batch_mean_stacks[batch_config_path]
-            batch_std_stack = batch_std_stacks[batch_config_path]
-
-            backend_kwargs = batch_refine_manager.make_differentiable_backend_kwargs(
-                image_stack=image_stack_batch,
-                mean_stack=batch_mean_stack,
-                std_stack=batch_std_stack,
-                particle_indices=batch_indices,
-                template_tensor=template_volume,
-                images_are_particles=True,
-            )
-            result = batch_refine_manager.get_refine_result(
-                backend_kwargs, correlation_batch_size, use_differentiable=True
-            )
-
-            loss_tensor = (
-                result["refined_z_score"]
-                if loss_metric == "scaled_mip"
-                else result["refined_cross_correlation"]
-            )
-
-            # Compute priors based on optimization mode
-            if prior_type == "laplacian":
-                if optimization_mode == "deformation_field":
-                    field_data = optimization_var["data"]
-                else:  # particle_shifts
-                    # For laplacian, still need to reshape to (2, T, N, 1)
-                    particle_shifts = optimization_var["variable"]  # (T, N, 2)
-                    field_data = particle_shifts.permute(2, 0, 1).unsqueeze(-1)  # (2, T, N, 1)
+    if optimizer_type == "lbfgs":
+        # L-BFGS optimization with closure
+        accumulated_loss_for_display = [0.0]  # Track loss for display
+        
+        for iter_idx in range(motion_iterations):
+            print(f"  Inner iteration: {iter_idx + 1}/{motion_iterations}")
+            
+            # Closure function for L-BFGS
+            def closure():
+                motion_optimizer.zero_grad()
+                accumulated_loss_closure = 0.0
                 
-                e_space, e_time = laplacian_compute(
-                    field_data,
-                    prior_params["sigma_a_tensor"],
-                    prior_params["alpha"],
-                    prior_params["spatial_spacing"],
-                    prior_params["temporal_spacing"],
+                for batch_idx, (batch_config_path, batch_indices) in enumerate(
+                    zip(batch_config_paths, batch_particle_indices, strict=True)
+                ):
+                    batch_size = len(batch_indices[0])
+                    batch_refine_manager = _make_differentiable_refine_manager(
+                        batch_config_path
+                    )
+                    if iter_idx == 0 and batch_idx == 0:  # Only print batch info on first iteration
+                        actual_particle_count = (
+                            batch_refine_manager.particle_stack.num_particles
+                        )
+                        print(
+                            f"    Training batch {batch_idx + 1}: "
+                            f"indices={batch_size}, "
+                            f"actual={actual_particle_count}, "
+                            f"config={Path(batch_config_path).name}"
+                        )
+                    batch_particle_stack = batch_refine_manager.particle_stack
+
+                    # Extract particle images based on optimization mode
+                    if optimization_mode == "deformation_field":
+                        image_stack_batch = (
+                            batch_particle_stack.construct_image_stack_from_movie(
+                                movie=image,
+                                deformation_field=optimization_var["variable"],
+                                pos_reference="top-left",
+                                handle_bounds="pad",
+                                padding_mode="reflect",
+                                padding_value=0.0,
+                                pre_exposure=pre_exposure,
+                                fluence_per_frame=fluence_per_frame,
+                            )
+                        )
+                    else:  # particle_shifts
+                        batch_start_idx = sum(
+                            len(batch_particle_indices[i][0])
+                            for i in range(batch_config_paths.index(batch_config_path))
+                        )
+                        batch_end_idx = batch_start_idx + batch_size
+                        batch_particle_shifts = optimization_var["variable"][
+                            :, batch_start_idx:batch_end_idx, :
+                        ]
+                        image_stack_batch = (
+                            batch_particle_stack.construct_image_stack_from_movie(
+                                movie=image,
+                                particle_shifts=batch_particle_shifts,
+                                pos_reference="top-left",
+                                handle_bounds="pad",
+                                padding_mode="reflect",
+                                padding_value=0.0,
+                                pre_exposure=pre_exposure,
+                                fluence_per_frame=fluence_per_frame,
+                            )
+                        )
+
+                    # Reuse pre-computed mean/std stacks
+                    batch_mean_stack = batch_mean_stacks[batch_config_path]
+                    batch_std_stack = batch_std_stacks[batch_config_path]
+
+                    backend_kwargs = batch_refine_manager.make_differentiable_backend_kwargs(
+                        image_stack=image_stack_batch,
+                        mean_stack=batch_mean_stack,
+                        std_stack=batch_std_stack,
+                        particle_indices=batch_indices,
+                        template_tensor=template_volume,
+                        images_are_particles=True,
+                    )
+                    result = batch_refine_manager.get_refine_result(
+                        backend_kwargs, correlation_batch_size, use_differentiable=True
+                    )
+
+                    loss_tensor = (
+                        result["refined_z_score"]
+                        if loss_metric == "scaled_mip"
+                        else result["refined_cross_correlation"]
+                    )
+
+                    # Compute priors based on optimization mode
+                    if prior_type == "laplacian":
+                        if optimization_mode == "deformation_field":
+                            field_data = optimization_var["data"]
+                        else:  # particle_shifts
+                            particle_shifts = optimization_var["variable"]  # (T, N, 2)
+                            field_data = particle_shifts.permute(2, 0, 1).unsqueeze(-1)  # (2, T, N, 1)
+                        
+                        e_space, e_time = laplacian_compute(
+                            field_data,
+                            prior_params["sigma_a_tensor"],
+                            prior_params["alpha"],
+                            prior_params["spatial_spacing"],
+                            prior_params["temporal_spacing"],
+                        )
+                    else:  # relion
+                        if optimization_mode == "deformation_field":
+                            field_data = optimization_var["data"]
+                            coords = prior_params["image_coords"]
+                            e_space, e_time = relion2019_compute(
+                                field_data,
+                                coords,
+                                prior_params["sigma_d_val"],
+                                prior_params["sigma_v_norm"],
+                                prior_params["sigma_a_norm"],
+                                lam=relion_lam,
+                                vecs=relion_vecs,
+                                is_particle_shifts=False,
+                            )
+                        else:  # particle_shifts
+                            particle_shifts = optimization_var["variable"]  # (T, N, 2)
+                            particle_coords_matched = particle_coords.to(dtype=particle_shifts.dtype)
+                            e_space, e_time = relion2019_compute(
+                                particle_shifts,
+                                particle_coords_matched,
+                                prior_params["sigma_d_val"],
+                                prior_params["sigma_v_norm"],
+                                prior_params["sigma_a_norm"],
+                                lam=relion_lam,
+                                vecs=relion_vecs,
+                                is_particle_shifts=True,
+                            )
+
+                    weight = batch_size / total_n_particles
+                    e_space = e_space * weight
+                    e_time = e_time * weight
+                    e_obs = -2 * torch.mean(loss_tensor) * weight
+
+                    batch_loss = e_obs + e_space + e_time
+                    accumulated_loss_closure += batch_loss.item()
+                    batch_loss.backward()
+
+                    # Clean up
+                    del (
+                        image_stack_batch,
+                        batch_mean_stack,
+                        batch_std_stack,
+                        backend_kwargs,
+                        result,
+                        loss_tensor,
+                        batch_loss,
+                        e_obs,
+                        e_space,
+                        e_time,
+                    )
+                    del batch_refine_manager, batch_particle_stack
+
+                torch.cuda.empty_cache()
+                # Store loss for tracking
+                accumulated_loss_for_display[0] = accumulated_loss_closure
+                # Return loss tensor for L-BFGS
+                return torch.tensor(
+                    accumulated_loss_closure, device=device, requires_grad=False
                 )
-            else:  # relion
+
+            # Run L-BFGS step
+            motion_optimizer.step(closure)
+            current_loss = accumulated_loss_for_display[0]
+            accumulated_loss += current_loss
+            loss_history.append(current_loss)
+
+            # Check for convergence
+            converged, loss_history = _check_convergence(
+                loss_history, convergence_threshold, num_convergence_iterations
+            )
+            if converged:
+                print(
+                    f"  Converged: loss change < {convergence_threshold} "
+                    f"for {num_convergence_iterations} iterations"
+                )
+                break
+
+            if iter_idx % 3 == 0:
+                gc.collect()
+                torch.cuda.empty_cache()
+    else:  # adam
+        # Adam optimization (original code)
+        for iter_idx in range(motion_iterations):
+            print(f"  Inner iteration: {iter_idx + 1}/{motion_iterations}")
+            motion_optimizer.zero_grad()
+            batch_accumulated_loss = 0.0
+
+            for batch_idx, (batch_config_path, batch_indices) in enumerate(
+                zip(batch_config_paths, batch_particle_indices, strict=True)
+            ):
+                batch_size = len(batch_indices[0])
+                batch_refine_manager = _make_differentiable_refine_manager(
+                    batch_config_path
+                )
+                if iter_idx == 0:  # Only print batch info on first iteration
+                    actual_particle_count = (
+                        batch_refine_manager.particle_stack.num_particles
+                    )
+                    print(
+                        f"    Training batch {batch_idx + 1}: "
+                        f"indices={batch_size}, "
+                        f"actual={actual_particle_count}, "
+                        f"config={Path(batch_config_path).name}"
+                    )
+                batch_particle_stack = batch_refine_manager.particle_stack
+
+                # Extract particle images based on optimization mode
                 if optimization_mode == "deformation_field":
-                    field_data = optimization_var["data"]
-                    coords = prior_params["image_coords"]
-                    e_space, e_time = relion2019_compute(
-                        field_data,
-                        coords,
-                        prior_params["sigma_d_val"],
-                        prior_params["sigma_v_norm"],
-                        prior_params["sigma_a_norm"],
-                        lam=relion_lam,
-                        vecs=relion_vecs,
-                        is_particle_shifts=False,
+                    image_stack_batch = (
+                        batch_particle_stack.construct_image_stack_from_movie(
+                            movie=image,
+                            deformation_field=optimization_var["variable"],
+                            pos_reference="top-left",
+                            handle_bounds="pad",
+                            padding_mode="reflect",
+                            padding_value=0.0,
+                            pre_exposure=pre_exposure,
+                            fluence_per_frame=fluence_per_frame,
+                        )
                     )
                 else:  # particle_shifts
-                    particle_shifts = optimization_var["variable"]  # (T, N, 2)
-                    # Ensure particle_coords matches particle_shifts dtype
-                    particle_coords_matched = particle_coords.to(dtype=particle_shifts.dtype)
-                    e_space, e_time = relion2019_compute(
-                        particle_shifts,  # (T, N, 2) - pass directly
-                        particle_coords_matched,
-                        prior_params["sigma_d_val"],
-                        prior_params["sigma_v_norm"],
-                        prior_params["sigma_a_norm"],
-                        lam=relion_lam,
-                        vecs=relion_vecs,
-                        is_particle_shifts=True,  # Indicate this is particle_shifts format
+                    batch_start_idx = sum(
+                        len(batch_particle_indices[i][0])
+                        for i in range(batch_config_paths.index(batch_config_path))
+                    )
+                    batch_end_idx = batch_start_idx + batch_size
+                    batch_particle_shifts = optimization_var["variable"][
+                        :, batch_start_idx:batch_end_idx, :
+                    ]
+                    image_stack_batch = (
+                        batch_particle_stack.construct_image_stack_from_movie(
+                            movie=image,
+                            particle_shifts=batch_particle_shifts,
+                            pos_reference="top-left",
+                            handle_bounds="pad",
+                            padding_mode="reflect",
+                            padding_value=0.0,
+                            pre_exposure=pre_exposure,
+                            fluence_per_frame=fluence_per_frame,
+                        )
                     )
 
-            weight = batch_size / total_n_particles
-            e_space = e_space * weight
-            e_time = e_time * weight
-            e_obs = -2 * torch.mean(loss_tensor) * weight
+                # Reuse pre-computed mean/std stacks
+                batch_mean_stack = batch_mean_stacks[batch_config_path]
+                batch_std_stack = batch_std_stacks[batch_config_path]
 
-            batch_loss = e_obs + e_space + e_time
-            batch_accumulated_loss += batch_loss.item()
-            batch_loss.backward()
+                backend_kwargs = batch_refine_manager.make_differentiable_backend_kwargs(
+                    image_stack=image_stack_batch,
+                    mean_stack=batch_mean_stack,
+                    std_stack=batch_std_stack,
+                    particle_indices=batch_indices,
+                    template_tensor=template_volume,
+                    images_are_particles=True,
+                )
+                result = batch_refine_manager.get_refine_result(
+                    backend_kwargs, correlation_batch_size, use_differentiable=True
+                )
 
-            # Delete everything
-            del (
-                image_stack_batch,
-                batch_mean_stack,
-                batch_std_stack,
-                backend_kwargs,
-                result,
-                loss_tensor,
-                batch_loss,
-                e_obs,
-                e_space,
-                e_time,
-            )
-            del batch_refine_manager, batch_particle_stack
+                loss_tensor = (
+                    result["refined_z_score"]
+                    if loss_metric == "scaled_mip"
+                    else result["refined_cross_correlation"]
+                )
 
-        torch.cuda.empty_cache()
-        motion_optimizer.step()
-        accumulated_loss += batch_accumulated_loss
+                # Compute priors based on optimization mode
+                if prior_type == "laplacian":
+                    if optimization_mode == "deformation_field":
+                        field_data = optimization_var["data"]
+                    else:  # particle_shifts
+                        particle_shifts = optimization_var["variable"]  # (T, N, 2)
+                        field_data = particle_shifts.permute(2, 0, 1).unsqueeze(-1)  # (2, T, N, 1)
+                    
+                    e_space, e_time = laplacian_compute(
+                        field_data,
+                        prior_params["sigma_a_tensor"],
+                        prior_params["alpha"],
+                        prior_params["spatial_spacing"],
+                        prior_params["temporal_spacing"],
+                    )
+                else:  # relion
+                    if optimization_mode == "deformation_field":
+                        field_data = optimization_var["data"]
+                        coords = prior_params["image_coords"]
+                        e_space, e_time = relion2019_compute(
+                            field_data,
+                            coords,
+                            prior_params["sigma_d_val"],
+                            prior_params["sigma_v_norm"],
+                            prior_params["sigma_a_norm"],
+                            lam=relion_lam,
+                            vecs=relion_vecs,
+                            is_particle_shifts=False,
+                        )
+                    else:  # particle_shifts
+                        particle_shifts = optimization_var["variable"]  # (T, N, 2)
+                        particle_coords_matched = particle_coords.to(dtype=particle_shifts.dtype)
+                        e_space, e_time = relion2019_compute(
+                            particle_shifts,
+                            particle_coords_matched,
+                            prior_params["sigma_d_val"],
+                            prior_params["sigma_v_norm"],
+                            prior_params["sigma_a_norm"],
+                            lam=relion_lam,
+                            vecs=relion_vecs,
+                            is_particle_shifts=True,
+                        )
 
-        if iter_idx % 3 == 0:
-            gc.collect()
+                weight = batch_size / total_n_particles
+                e_space = e_space * weight
+                e_time = e_time * weight
+                e_obs = -2 * torch.mean(loss_tensor) * weight
+
+                batch_loss = e_obs + e_space + e_time
+                batch_accumulated_loss += batch_loss.item()
+                batch_loss.backward()
+
+                # Delete everything
+                del (
+                    image_stack_batch,
+                    batch_mean_stack,
+                    batch_std_stack,
+                    backend_kwargs,
+                    result,
+                    loss_tensor,
+                    batch_loss,
+                    e_obs,
+                    e_space,
+                    e_time,
+                )
+                del batch_refine_manager, batch_particle_stack
+
             torch.cuda.empty_cache()
+            motion_optimizer.step()
+            accumulated_loss += batch_accumulated_loss
+
+            if iter_idx % 3 == 0:
+                gc.collect()
+                torch.cuda.empty_cache()
 
     # Return final result based on mode
     if optimization_mode == "deformation_field":

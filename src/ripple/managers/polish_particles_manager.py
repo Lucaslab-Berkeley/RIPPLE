@@ -15,7 +15,11 @@ from ripple.config import (
     OutputConfig,
     PolishParticlesConfig,
 )
-from ripple.core import core_optimize_sigmas, core_polish_particles
+from ripple.core import (
+    core_optimize_sigmas,
+    core_polish_particles,
+    core_polish_particles_lbfgs,
+)
 from ripple.managers import manager_utils
 from ripple.utils.custom_types import BaseModelRIPPLE
 from ripple.utils.data_io import load_particle_shifts, read_mrc_to_tensor
@@ -140,10 +144,6 @@ class PolishParticlesManager(BaseModelRIPPLE):
         save_intermediate_fields: bool = False,
         intermediate_fields_dir: str = ".",
     ) -> None:
-        # Set up logger to write to log.txt
-        setup_logger("log.txt")
-        logger = logging.getLogger("ripple")
-        logger.info("Starting run_polish_particles")
         """Align the frames of a cryo-EM movie.
 
         Parameters
@@ -174,7 +174,7 @@ class PolishParticlesManager(BaseModelRIPPLE):
         setup_logger("log.txt")
         logger = logging.getLogger("ripple")
         logger.info("Starting run_polish_particles")
-        
+
         # Load missing tensors
         # Only skip loading deformation_field if we're in particle_shifts mode
         # AND we have a particle_shifts_path (initial particle shifts provided)
@@ -213,19 +213,35 @@ class PolishParticlesManager(BaseModelRIPPLE):
                 )
             if not opt_config.enabled:
                 # Optimization config exists but is disabled, skip optimization
-                (
-                    corrected_movie,
-                    updated_deformation_field,
-                    movie_prepared,
-                    trajectory,
-                ) = core_polish_particles(
-                    **core_kwargs,
-                    do_correct_motion=True,
-                    movie_extract=movie_extract,
-                    particle_batch_size=particle_batch_size,
-                    save_intermediate_fields=save_intermediate_fields,
-                    intermediate_fields_dir=intermediate_fields_dir,
-                )
+                if self.alignment_config.optimizer_type == "lbfgs":
+                    (
+                        corrected_movie,
+                        updated_deformation_field,
+                        movie_prepared,
+                        trajectory,
+                    ) = core_polish_particles_lbfgs(
+                        **core_kwargs,
+                        do_correct_motion=True,
+                        movie_extract=movie_extract,
+                        particle_batch_size=particle_batch_size,
+                        save_intermediate_fields=save_intermediate_fields,
+                        intermediate_fields_dir=intermediate_fields_dir,
+                        learning_rate=self.alignment_config.learning_rate,
+                    )
+                else:
+                    (
+                        corrected_movie,
+                        updated_deformation_field,
+                        movie_prepared,
+                        trajectory,
+                    ) = core_polish_particles(
+                        **core_kwargs,
+                        do_correct_motion=True,
+                        movie_extract=movie_extract,
+                        particle_batch_size=particle_batch_size,
+                        save_intermediate_fields=save_intermediate_fields,
+                        intermediate_fields_dir=intermediate_fields_dir,
+                    )
                 manager_utils.save_results(
                     self.output_config,
                     self.movie_config,
@@ -278,6 +294,13 @@ class PolishParticlesManager(BaseModelRIPPLE):
                     "optimization_mode", "deformation_field"
                 ),
                 initial_particle_shifts=core_kwargs.get("initial_particle_shifts"),
+                optimizer_type=self.alignment_config.optimizer_type,
+                # L-BFGS parameters - using defaults for now since they're not in config
+                # These can be added to alignment_config if needed
+                lbfgs_max_eval=5,
+                lbfgs_line_search_fn="strong_wolfe",
+                convergence_threshold=0.0005,
+                num_convergence_iterations=5,
             )
 
             # Extract results
@@ -287,16 +310,29 @@ class PolishParticlesManager(BaseModelRIPPLE):
             corrected_movie = movie
             movie_prepared = movie
         else:
-            corrected_movie, updated_deformation_field, movie_prepared, trajectory = (
-                core_polish_particles(
-                    **core_kwargs,
-                    do_correct_motion=True,
-                    movie_extract=movie_extract,
-                    particle_batch_size=particle_batch_size,
-                    save_intermediate_fields=save_intermediate_fields,
-                    intermediate_fields_dir=intermediate_fields_dir,
+            if self.alignment_config.optimizer_type == "lbfgs":
+                corrected_movie, updated_deformation_field, movie_prepared, trajectory = (
+                    core_polish_particles_lbfgs(
+                        **core_kwargs,
+                        do_correct_motion=True,
+                        movie_extract=movie_extract,
+                        particle_batch_size=particle_batch_size,
+                        save_intermediate_fields=save_intermediate_fields,
+                        intermediate_fields_dir=intermediate_fields_dir,
+                        learning_rate=self.alignment_config.learning_rate,
+                    )
                 )
-            )
+            else:
+                corrected_movie, updated_deformation_field, movie_prepared, trajectory = (
+                    core_polish_particles(
+                        **core_kwargs,
+                        do_correct_motion=True,
+                        movie_extract=movie_extract,
+                        particle_batch_size=particle_batch_size,
+                        save_intermediate_fields=save_intermediate_fields,
+                        intermediate_fields_dir=intermediate_fields_dir,
+                    )
+                )
 
         manager_utils.save_results(
             self.output_config,
