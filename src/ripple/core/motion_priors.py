@@ -290,7 +290,7 @@ def relion2019_eigendecompose(
     coords: torch.Tensor,
     sigma_d: float,
     sigma_v: float,
-    top_k: int | None = None,
+    top_k: float | None = 0.2,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Eigendecomposes the exponential kernel.
@@ -303,8 +303,9 @@ def relion2019_eigendecompose(
         Spatial correlation length
     sigma_v : float
         Velocity magnitude scale
-    top_k : int | None, optional
-        If not None, truncate to top_k modes
+    top_k : float | None, optional
+        Fraction of modes to keep (between 0 and 1). If None, keeps all modes.
+        Default is 0.2 (keeps top 20% of modes).
 
     Returns
     -------
@@ -325,9 +326,18 @@ def relion2019_eigendecompose(
     vals = vals[idx]
     vecs = vecs[:, idx]
 
+    # Truncate to top_k fraction of modes
     if top_k is not None:
-        vals = vals[:top_k]
-        vecs = vecs[:, :top_k]
+        num_points = coords.shape[0]
+        k = int(top_k * num_points)
+        # Ensure at least 1 mode and at most num_points modes
+        k = max(1, min(k, num_points))
+        if k < len(vals):
+            vals = vals[:k]
+            vecs = vecs[:, :k]
+
+    # Clamp eigenvalues to be non-negative (numerical errors can cause small negatives)
+    vals = torch.clamp(vals, min=0.0)
 
     # basis b_i = sqrt(lambda_i) * w_i  (Eq. 3)
     basis_vectors = vecs * torch.sqrt(vals + 1e-12)
@@ -673,7 +683,10 @@ def relion2019_compute(
     sigma_d: float,
     sigma_v: float,
     sigma_a: float | torch.Tensor,
-    top_k: int | None = None,
+    top_k: float | None = 0.2,
+    lam: torch.Tensor | None = None,
+    vecs: torch.Tensor | None = None,
+    is_particle_shifts: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Computes the RELION 2019 energy.
@@ -681,17 +694,28 @@ def relion2019_compute(
     Parameters
     ----------
     field : torch.Tensor
-        (2, nt, nh, nw)
+        For deformation_field: (2, nt, nh, nw)
+        For particle_shifts: (T, N, 2) where T is frames, N is particles
     coords : torch.Tensor
-        (P, 2)
+        (P, 2) coordinates
     sigma_d : float
         Spatial correlation length
     sigma_v : float
         Velocity magnitude scale
     sigma_a : float
         Acceleration scale
-    top_k : int | None, optional
-        If not None, truncate to top_k modes
+    top_k : float | None, optional
+        Fraction of modes to keep (between 0 and 1). If None, keeps all modes.
+        Default is 0.2 (keeps top 20% of modes).
+    lam : torch.Tensor | None, optional
+        Precomputed eigenvalues (R,). If None, will be computed from coords, sigma_d, sigma_v.
+    vecs : torch.Tensor | None, optional
+        Precomputed eigenvectors (P, R). If None, will be computed from coords, sigma_d, sigma_v.
+        Must be provided if lam is provided.
+    is_particle_shifts : bool, optional
+        If True, field is in particle_shifts format (T, N, 2).
+        If False, field is in deformation_field format (2, nt, nh, nw).
+        Default is False.
 
     Returns
     -------
@@ -705,40 +729,52 @@ def relion2019_compute(
     e_space = mean |c_{i,f}|^2
     e_time = 1/sigma_A^2 * mean lam_i * |c_{i,f} - c_{i,f-1}|^2
     """
-    _, nt, nh, nw = field.shape
-    num_points = nh * nw
+    if is_particle_shifts:
+        # field is (T, N, 2) where T is frames, N is particles
+        # Compute velocities directly: (T-1, N, 2)
+        v = field[1:] - field[:-1]  # (T-1, N, 2)
+        num_points = v.shape[1]  # N
+    else:
+        # field is (2, nt, nh, nw) - deformation field format
+        _, nt, nh, nw = field.shape
+        num_points = nh * nw
 
-    # field[:, 1:]: (2, nt-1, P_y, P_x) - frames 1 through nt-1
-    # field[:, :-1]: (2, nt-1, P_y, P_x) - frames 0 through nt-1
-    # Difference: (2, nt-1, P_y, P_x) - velocity between consecutive frames
-    # .permute(1, 2, 3, 0): (nt-1, P_y, P_x, 2) - moves time first, components last
-    # .reshape(nt-1, num_points, 2): (nt-1, P_y * P_x, 2) - flattens spatial grid
-    # velocities: (F, num_points, 2)
-    v = (
-        (field[:, 1:] - field[:, :-1])
-        .permute(1, 2, 3, 0)
-        .reshape(nt - 1, num_points, 2)
-    )
+        # field[:, 1:]: (2, nt-1, P_y, P_x) - frames 1 through nt-1
+        # field[:, :-1]: (2, nt-1, P_y, P_x) - frames 0 through nt-1
+        # Difference: (2, nt-1, P_y, P_x) - velocity between consecutive frames
+        # .permute(1, 2, 3, 0): (nt-1, P_y, P_x, 2) - moves time first, components last
+        # .reshape(nt-1, num_points, 2): (nt-1, P_y * P_x, 2) - flattens spatial grid
+        # velocities: (F, num_points, 2)
+        v = (
+            (field[:, 1:] - field[:, :-1])
+            .permute(1, 2, 3, 0)
+            .reshape(nt - 1, num_points, 2)
+        )
 
-    # eigendecompose Σ_V
-    lam, vecs, _ = relion2019_eigendecompose(coords, sigma_d, sigma_v, top_k)
+    # eigendecompose Σ_V (only if not provided)
+    if lam is None or vecs is None:
+        lam, vecs, _ = relion2019_eigendecompose(coords, sigma_d, sigma_v, top_k)
     # lam: (R,) - eigenvalues (R ≤ P, possibly truncated)
     # vecs: (P, R) - eigenvectors (each column is one eigenvector)
     # B: (P, R) - basis vectors
+
+    # Clamp eigenvalues to be non-negative (numerical errors can cause small negatives)
+    lam_clamped = torch.clamp(lam, min=0.0)
+
+    # Compute sqrt(lam + eps) for division
+    sqrt_lam = torch.sqrt(lam_clamped + 1e-12)
 
     # project velocities: c[f,i,d], using v[f,p,d] = sum_i B[p,i] c[f,i,d]
     # Bt = B.t()  # (R, P)
     # c = torch.einsum("rp,fpc->frc", Bt, v)  # (F-1, R, 2)
 
-    c = torch.einsum("rp,fpc->frc", vecs.t(), v) / torch.sqrt(lam + 1e-12).view(
-        1, -1, 1
-    )
+    c = torch.einsum("rp,fpc->frc", vecs.t(), v) / sqrt_lam.view(1, -1, 1)
     # vecs.t(): (r, p) - eigenvector matrix transposed
     # v: (f, p, 2) - velocities, 2 for x and y components
     # c: (f, r, 2) - coefficients
 
     e_space = relion2019_e_space(c)
-    e_time = relion2019_e_time(c, lam, sigma_a)
+    e_time = relion2019_e_time(c, lam_clamped, sigma_a)
 
     return e_space, e_time
 

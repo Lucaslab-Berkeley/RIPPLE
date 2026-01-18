@@ -231,6 +231,67 @@ def load_deformation_field(
     return read_deformation_field_from_csv(file_path)
 
 
+def load_particle_shifts(
+    file_path: str | os.PathLike | Path,
+    n_frames: int,
+    n_particles: int,
+    device: torch.device | None = None,
+) -> torch.Tensor:
+    """Load particle shifts from CSV file.
+
+    Parameters
+    ----------
+    file_path: str | os.PathLike | Path
+        Path to CSV file with columns: particle_index, frame, y_shift, x_shift.
+    n_frames: int
+        Number of frames in the movie.
+    n_particles: int
+        Number of particles.
+    device: torch.device | None
+        Device to load tensor on. If None, uses CPU.
+
+    Returns
+    -------
+    torch.Tensor
+        Particle shifts tensor with shape (T, N, 2) where T is number of frames
+        and N is number of particles. The last dimension is (y_shift, x_shift).
+    """
+    df = pd.read_csv(file_path)
+    required_columns = ["particle_index", "frame", "y_shift", "x_shift"]
+    if not all(col in df.columns for col in required_columns):
+        raise ValueError(
+            f"CSV file must contain columns: {required_columns}. "
+            f"Found: {list(df.columns)}"
+        )
+
+    # Initialize tensor with zeros
+    particle_shifts = torch.zeros((n_frames, n_particles, 2), dtype=torch.float32)
+
+    # Fill in shifts from DataFrame
+    for _, row in df.iterrows():
+        particle_idx = int(row["particle_index"])
+        frame_idx = int(row["frame"])
+        y_shift = float(row["y_shift"])
+        x_shift = float(row["x_shift"])
+
+        if particle_idx >= n_particles:
+            raise ValueError(
+                f"Particle index {particle_idx} exceeds number of particles {n_particles}"
+            )
+        if frame_idx >= n_frames:
+            raise ValueError(
+                f"Frame index {frame_idx} exceeds number of frames {n_frames}"
+            )
+
+        particle_shifts[frame_idx, particle_idx, 0] = y_shift
+        particle_shifts[frame_idx, particle_idx, 1] = x_shift
+
+    if device is not None:
+        particle_shifts = particle_shifts.to(device)
+
+    return particle_shifts
+
+
 def save_deformation_field(
     deformation_field: torch.Tensor,
     file_path: str | os.PathLike | Path,

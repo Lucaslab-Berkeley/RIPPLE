@@ -219,6 +219,15 @@ class PolishParticlesConfig(BaseAlignmentConfig):
         Maximum number of particles to use for optimization, selecting the top N
         particles with the highest loss_metric values. Default is 10000000000
         (essentially unlimited).
+    optimization_mode: Literal["deformation_field", "particle_shifts"]
+        Optimization mode. If "deformation_field", optimizes a deformation field grid.
+        If "particle_shifts", optimizes particle shifts directly (T, N, 2).
+        Default is "deformation_field".
+    particle_shifts_path: str | None
+        Path to CSV file containing initial particle shifts with columns:
+        particle_index, frame, y_shift, x_shift. Only used if optimization_mode
+        is "particle_shifts". If None, initializes to zero shifts.
+        Default is None.
     prior_config: PriorConfig
         Configuration for motion priors. Defaults to PriorConfig().
     optimization_config: OptimizationConfig | None
@@ -230,6 +239,8 @@ class PolishParticlesConfig(BaseAlignmentConfig):
     loss_metric: Literal["mip", "scaled_mip"] = "scaled_mip"
     min_snr: float = 0.0
     best_n: PositiveInt = 10000000000
+    optimization_mode: Literal["deformation_field", "particle_shifts"] = "deformation_field"
+    particle_shifts_path: str | None = None
 
     # Nested configs with defaults
     prior_config: PriorConfig = Field(default_factory=PriorConfig)

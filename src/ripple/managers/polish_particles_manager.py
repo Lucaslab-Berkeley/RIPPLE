@@ -1,5 +1,6 @@
 """Manager for polishing particles."""
 
+import logging
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import einops
@@ -17,7 +18,8 @@ from ripple.config import (
 from ripple.core import core_optimize_sigmas, core_polish_particles
 from ripple.managers import manager_utils
 from ripple.utils.custom_types import BaseModelRIPPLE
-from ripple.utils.data_io import read_mrc_to_tensor
+from ripple.utils.data_io import load_particle_shifts, read_mrc_to_tensor
+from ripple.utils.logger import setup_logger
 
 if TYPE_CHECKING:
     from torch_motion_correction import OptimizationTracker
@@ -38,7 +40,8 @@ class PolishParticlesManager(BaseModelRIPPLE):
         movie: torch.Tensor,
         gain_map: torch.Tensor,
         dark_map: torch.Tensor,
-        deformation_field: torch.Tensor,
+        deformation_field: torch.Tensor | None = None,
+        particle_shifts: torch.Tensor | None = None,
     ) -> dict[str, Any]:
         """Setup the backend kwargs for the align frames manager."""
         loss_trajectories = self.output_config.loss_trajectories_output_path is not None
@@ -59,6 +62,24 @@ class PolishParticlesManager(BaseModelRIPPLE):
         df_path = refine_config["particle_stack"]["df_path"]
 
         var_image, mean_image, voltage, particle_indices = _load_refine_results(df_path)
+
+        # Handle initial particle_shifts loading if needed
+        initial_particle_shifts = None
+        if self.alignment_config.optimization_mode == "particle_shifts":
+            if self.alignment_config.particle_shifts_path is not None:
+                # Load from file
+                n_frames = movie.shape[0]
+                n_particles = len(particle_indices[0]) if particle_indices else 0
+                initial_particle_shifts = load_particle_shifts(
+                    file_path=self.alignment_config.particle_shifts_path,
+                    n_frames=n_frames,
+                    n_particles=n_particles,
+                    device=self.computational_config.gpu_id,
+                )
+            elif particle_shifts is not None:
+                # Use provided particle_shifts
+                initial_particle_shifts = particle_shifts
+
         backend_kwargs = {
             "movie": movie,
             "initial_deformation_field": deformation_field,
@@ -101,6 +122,8 @@ class PolishParticlesManager(BaseModelRIPPLE):
             ),
             "sigma_a_decay": self.alignment_config.prior_config.init_sigma_a_decay,
             "sigma_a_offset": self.alignment_config.prior_config.init_sigma_a_offset,
+            "optimization_mode": self.alignment_config.optimization_mode,
+            "initial_particle_shifts": initial_particle_shifts,
         }
         return backend_kwargs
 
@@ -111,17 +134,20 @@ class PolishParticlesManager(BaseModelRIPPLE):
         gain_map: torch.Tensor | None = None,
         dark_map: torch.Tensor | None = None,
         deformation_field: torch.Tensor | None = None,
+        particle_shifts: torch.Tensor | None = None,
         movie_extract: bool = True,
         particle_batch_size: int = 100,
         save_intermediate_fields: bool = False,
         intermediate_fields_dir: str = ".",
     ) -> None:
+        # Set up logger to write to log.txt
+        setup_logger("log.txt")
+        logger = logging.getLogger("ripple")
+        logger.info("Starting run_polish_particles")
         """Align the frames of a cryo-EM movie.
 
         Parameters
         ----------
-        output_dataframe_path: str
-            Path to save the output dataframe.
         movie: Optional[torch.Tensor]
             Movie tensor. If provided, will not be loaded from config.
         gain_map: Optional[torch.Tensor]
@@ -130,6 +156,11 @@ class PolishParticlesManager(BaseModelRIPPLE):
             Dark map tensor. If provided, will not be loaded from config.
         deformation_field: Optional[torch.Tensor]
             Deformation field tensor. If provided, will not be loaded from config.
+            Only used if optimization_mode is "deformation_field".
+        particle_shifts: Optional[torch.Tensor]
+            Particle shifts tensor with shape (T, N, 2). If provided, will be used
+            as initial particle_shifts. Only used if optimization_mode is
+            "particle_shifts".
         movie_extract: bool
             Whether to extract the movie.
         particle_batch_size: int
@@ -139,6 +170,19 @@ class PolishParticlesManager(BaseModelRIPPLE):
         intermediate_fields_dir: str | None
             Directory to save the intermediate fields.
         """
+        # Set up logger to write to log.txt
+        setup_logger("log.txt")
+        logger = logging.getLogger("ripple")
+        logger.info("Starting run_polish_particles")
+        
+        # Load missing tensors
+        # Only skip loading deformation_field if we're in particle_shifts mode
+        # AND we have a particle_shifts_path (initial particle shifts provided)
+        # Otherwise, we need the deformation_field to compute initial particle shifts
+        skip_deformation_field = (
+            self.alignment_config.optimization_mode == "particle_shifts"
+            and self.alignment_config.particle_shifts_path is not None
+        )
         (
             movie,
             gain_map,
@@ -152,10 +196,11 @@ class PolishParticlesManager(BaseModelRIPPLE):
             gain_map,
             dark_map,
             deformation_field,
+            skip_deformation_field=skip_deformation_field,
         )
 
         core_kwargs = self.setup_backend_kwargs(
-            movie, gain_map, dark_map, deformation_field
+            movie, gain_map, dark_map, deformation_field, particle_shifts
         )
         trajectory: OptimizationTracker | None = None
 
@@ -229,6 +274,10 @@ class PolishParticlesManager(BaseModelRIPPLE):
                 sigma_history_output_path=opt_config.sigma_history_output_path,
                 training_history_output_path=opt_config.training_history_output_path,
                 validation_history_output_path=opt_config.validation_history_output_path,
+                optimization_mode=core_kwargs.get(
+                    "optimization_mode", "deformation_field"
+                ),
+                initial_particle_shifts=core_kwargs.get("initial_particle_shifts"),
             )
 
             # Extract results

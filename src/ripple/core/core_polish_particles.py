@@ -24,6 +24,7 @@ from .core_utils import (
     _filter_particles_by_quality,
     _get_particle_coordinates,
     _make_differentiable_refine_manager,
+    compute_particle_shifts_from_deformation_field,
     get_batch_mean_std_stacks,
 )
 from .generate_image import dose_weight_memory_efficient
@@ -227,9 +228,11 @@ def core_polish_particles(
         "best_n": best_n,
         "save_intermediate_fields": save_intermediate_fields,
         "intermediate_fields_dir": intermediate_fields_dir,
-        "optimization_mode": optimization_mode,
-        "initial_particle_shifts": initial_particle_shifts,
     }
+    # Only add optimization_mode and initial_particle_shifts for particle-based estimation
+    if movie_extract:
+        estimate_kwargs["optimization_mode"] = optimization_mode
+        estimate_kwargs["initial_particle_shifts"] = initial_particle_shifts
     # Prior parameters only for bayesian estimation
     prior_kwargs: dict[str, Any] = {
         "prior_type": prior_type,
@@ -660,6 +663,7 @@ def estimate_local_motion_2dtm_particles_bayesian(
     sigma_a_offset: float = 1.0,
     optimization_mode: Literal["deformation_field", "particle_shifts"] = "deformation_field",
     initial_particle_shifts: torch.Tensor | None = None,  # (T, N, 2) if mode is particle_shifts
+    grid_type: Literal["catmull_rom", "bspline"] = "catmull_rom",
 ) -> torch.Tensor | dict[str, torch.Tensor] | tuple[torch.Tensor, OptimizationTracker] | tuple[dict[str, torch.Tensor], OptimizationTracker]:
     """Estimate motion (new method).
 
@@ -773,6 +777,7 @@ def estimate_local_motion_2dtm_particles_bayesian(
         deformation_field_resolution=deformation_field_resolution,
         device=device,
         requires_grad=True,
+        grid_type=grid_type,
     )
     refine_config_path = setup_result["refine_config_path"]
     particle_indices = setup_result["particle_indices"]
@@ -782,6 +787,7 @@ def estimate_local_motion_2dtm_particles_bayesian(
     image = setup_result["image"]
     optimizer_kwargs = setup_result["optimizer_kwargs"]
     trajectory = setup_result["trajectory"]
+    grid_type_from_setup = setup_result.get("grid_type", "catmull_rom")
 
     # Create batch configs once before optimization loop
     # This will work with the already-filtered CSV
@@ -798,11 +804,26 @@ def estimate_local_motion_2dtm_particles_bayesian(
     if optimization_mode == "particle_shifts":
         # Initialize particle_shifts
         if initial_particle_shifts is None:
-            particle_shifts = torch.zeros(
-                (image.shape[0], total_n_particles, 2),
-                device=device,
-                requires_grad=True,
-            )
+            # Compute from initial_deformation_field if available
+            if initial_deformation_field is not None:
+                particle_shifts = compute_particle_shifts_from_deformation_field(
+                    deformation_field=initial_deformation_field,
+                    movie=image,
+                    refine_config_path=refine_config_path,
+                    pixel_spacing=pixel_spacing,
+                    grid_type=grid_type_from_setup,
+                    device=device,
+                    particle_indices=batch_particle_indices,
+                )
+                # Detach and require grad to make it a leaf tensor
+                particle_shifts = particle_shifts.detach().requires_grad_(True)
+            else:
+                # Initialize to zero if no deformation field provided
+                particle_shifts = torch.zeros(
+                    (image.shape[0], total_n_particles, 2),
+                    device=device,
+                    requires_grad=True,
+                )
         else:
             # Ensure it matches the number of particles
             if initial_particle_shifts.shape[1] != total_n_particles:
@@ -882,16 +903,68 @@ def estimate_local_motion_2dtm_particles_bayesian(
         mean_image=mean_image,
         var_image=var_image,
     )
+    
+    # Pre-compute eigendecomposition for RELION prior (coords and sigmas don't change)
+    relion_lam = None
+    relion_vecs = None
+    if prior_type == "relion":
+        from ripple.core.motion_priors import relion2019_eigendecompose
+        
+        # Determine which coords to use based on optimization mode
+        if optimization_mode == "particle_shifts":
+            assert particle_coords is not None, (
+                "particle_coords is required for particle_shifts mode with relion prior"
+            )
+            coords_for_eigen = particle_coords
+        else:
+            assert image_coords is not None, (
+                "image_coords is required for deformation_field mode with relion prior"
+            )
+            coords_for_eigen = image_coords
+        
+        # Compute eigendecomposition once
+        # top_k=0.2 means keep top 20% of modes (default)
+        relion_lam, relion_vecs, _ = relion2019_eigendecompose(
+            coords_for_eigen,
+            sigma_d,
+            sigma_v_norm,
+            top_k=0.2,  # Keep top 20% of modes
+        )
+    
     # Use try-finally to ensure cleanup of temp directory
     try:
         for iter_idx in pbar:
+            # Save particle shifts at start of each iteration for debugging
+            if optimization_mode == "particle_shifts":
+                particle_shifts = optimization_var["variable"]  # (T, N, 2)
+                # Convert to DataFrame format
+                particle_shifts_np = particle_shifts.detach().cpu().numpy()
+                T, N, _ = particle_shifts_np.shape
+                rows = []
+                for frame_idx in range(T):
+                    for particle_idx in range(N):
+                        y_shift = float(particle_shifts_np[frame_idx, particle_idx, 0])
+                        x_shift = float(particle_shifts_np[frame_idx, particle_idx, 1])
+                        rows.append({
+                            "particle_index": particle_idx,
+                            "frame": frame_idx,
+                            "y_shift": y_shift,
+                            "x_shift": x_shift,
+                        })
+                particle_shifts_df = pd.DataFrame(rows)
+                # Save to CSV
+                Path(intermediate_fields_dir).mkdir(parents=True, exist_ok=True)
+                particle_shifts_df.to_csv(
+                    f"{intermediate_fields_dir}/particle_shifts_iter_{iter_idx}.csv",
+                    index=False,
+                )
+            
             if save_intermediate_fields:
                 if optimization_mode == "deformation_field":
                     write_deformation_field_to_csv(
                         optimization_var["variable"].data,
                         f"{intermediate_fields_dir}/particle_deformation_field_{iter_idx}.csv",
                     )
-                # For particle_shifts, could save to CSV if needed
 
             torch.cuda.empty_cache()
 
@@ -1038,13 +1111,8 @@ def estimate_local_motion_2dtm_particles_bayesian(
                         loss=accumulated_loss,
                         step=iter_idx,
                     )
-                else:
-                    # For particle_shifts, could store in trajectory if needed
-                    trajectory.add_checkpoint(
-                        deformation_field=None,  # Not applicable
-                        loss=accumulated_loss,
-                        step=iter_idx,
-                    )
+                # For particle_shifts mode, skip trajectory checkpoints
+                # since trajectory is designed for deformation fields only
     finally:
         if temp_dir.exists():
             shutil.rmtree(temp_dir)
@@ -1227,6 +1295,9 @@ def _setup_estimate_motion(
         ).to(device)
         result["deformation_field"] = deformation_field
 
+    # Store grid_type in result for use in particle_shifts mode
+    result["grid_type"] = grid_type if grid_type is not None else "catmull_rom"
+
     return result
 
 
@@ -1244,6 +1315,8 @@ def _compute_loss(
     alpha_spatial: float | None = None,
     spatial_spacing: tuple[float, float] | None = None,
     temporal_spacing: float | None = None,
+    relion_lam: torch.Tensor | None = None,
+    relion_vecs: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Compute loss with motion priors.
 
@@ -1306,6 +1379,8 @@ def _compute_loss(
                 sigma_d=sigma_d,
                 sigma_v=sigma_v_norm,
                 sigma_a=sigma_a_norm,
+                lam=relion_lam,
+                vecs=relion_vecs,
             )
         elif prior_type == "laplacian":
             assert sigma_a_norm is not None, "sigma_a_norm is required for laplacian prior"
@@ -1321,13 +1396,11 @@ def _compute_loss(
             )
 
     else:  # particle_shifts
-        # Convert particle_shifts (T, N, 2) to field format (2, T, 1, N)
-        # This matches the expected format where nh=1, nw=N
-        particle_shifts = optimization_var["data"]  # (T, N, 2)
-
-        # Reshape to (2, T, 1, N) to match deformation field format
-        # Permute: (T, N, 2) -> (T, 2, N) -> (2, T, N) -> (2, T, 1, N)
-        field_data = particle_shifts.permute(2, 0, 1).unsqueeze(2)  # (2, T, 1, N)
+        # For particle_shifts, we have (T, N, 2) where T is frames and N is particles
+        # particle_shifts are shifts per frame relative to a common reference (like deformation_field)
+        # The difference between consecutive frames gives velocity
+        # Use "variable" directly to ensure we get the current value after optimizer steps
+        particle_shifts = optimization_var["variable"]  # (T, N, 2)
 
         if prior_type == "relion":
             assert sigma_d is not None, "sigma_d is required for relion prior"
@@ -1336,18 +1409,27 @@ def _compute_loss(
             assert particle_coords is not None, (
                 "particle_coords is required for particle_shifts mode with relion prior"
             )
+            
+            # Ensure particle_coords matches particle_shifts dtype
+            particle_coords_matched = particle_coords.to(dtype=particle_shifts.dtype)
+            
             e_space, e_time = relion2019_compute(
-                field=field_data,
-                coords=particle_coords,  # (N, 2) instead of (nh*nw, 2)
+                field=particle_shifts,  # (T, N, 2) - pass directly
+                coords=particle_coords_matched,  # (N, 2)
                 sigma_d=sigma_d,
                 sigma_v=sigma_v_norm,
                 sigma_a=sigma_a_norm,
+                lam=relion_lam,
+                vecs=relion_vecs,
+                is_particle_shifts=True,  # Indicate this is particle_shifts format
             )
         elif prior_type == "laplacian":
             assert sigma_a_norm is not None, "sigma_a_norm is required for laplacian prior"
             assert alpha_spatial is not None, (
                 "alpha_spatial is required for laplacian prior"
             )
+            # For laplacian, still need to reshape to (2, T, N, 1)
+            field_data = particle_shifts.permute(2, 0, 1).unsqueeze(-1)  # (2, T, N, 1)
             e_space, e_time = laplacian_compute(
                 field=field_data,
                 sigma_a=sigma_a_norm,
@@ -1364,9 +1446,6 @@ def _compute_loss(
     loss = e_obs + (e_space + e_time)
     print(f"e_obs: {e_obs.item()}")
     print(f"e_space: {e_space.item()}")
-    print(f"e_time: {e_time.item()}")
-    print(f"loss: {loss.item()}")
-
     return loss
 
 

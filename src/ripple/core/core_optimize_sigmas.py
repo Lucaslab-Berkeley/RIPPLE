@@ -26,6 +26,7 @@ from .core_utils import (
     _filter_particles_by_quality,
     _get_particle_coordinates,
     _make_differentiable_refine_manager,
+    compute_particle_shifts_from_deformation_field,
     get_batch_mean_std_stacks,
 )
 from .motion_priors import (
@@ -83,6 +84,8 @@ def core_optimize_sigmas(
     sigma_history_output_path: str | None = None,
     training_history_output_path: str | None = None,
     validation_history_output_path: str | None = None,
+    optimization_mode: Literal["deformation_field", "particle_shifts"] = "deformation_field",
+    initial_particle_shifts: torch.Tensor | None = None,
 ) -> dict[str, Any]:
     """Dispatcher function to run the appropriate sigma optimization algorithm.
 
@@ -178,12 +181,20 @@ def core_optimize_sigmas(
         Path to save training loss history as JSON. Default None
     validation_history_output_path : str | None
         Path to save validation loss history as JSON. Default None
+    optimization_mode : Literal["deformation_field", "particle_shifts"]
+        Optimization mode. If "deformation_field", optimizes a deformation field grid.
+        If "particle_shifts", optimizes particle shifts directly (T, N, 2).
+        Default is "deformation_field".
+    initial_particle_shifts : torch.Tensor | None
+        Initial particle shifts with shape (T, N, 2) where T is number of frames
+        and N is number of particles. Only used if optimization_mode is "particle_shifts".
+        If None, initializes to zero shifts. Default is None.
 
     Returns
     -------
     dict
         - "optimized_sigmas": dict of optimized sigma values
-        - "final_deformation_field": final deformation field
+        - "final_deformation_field": final deformation field or dict with "particle_shifts"
         - "validation_loss_history": list of validation losses
         - "training_loss_history": list of training losses
         - "sigma_history": list of sigma values at each iteration
@@ -229,6 +240,8 @@ def core_optimize_sigmas(
         "sigma_history_output_path": sigma_history_output_path,
         "training_history_output_path": training_history_output_path,
         "validation_history_output_path": validation_history_output_path,
+        "optimization_mode": optimization_mode,
+        "initial_particle_shifts": initial_particle_shifts,
     }
 
     if optimize_algorithm == "nelder-mead":
@@ -291,6 +304,8 @@ def optimize_sigmas_2dtm_nelder_mead(
     sigma_history_output_path: str | None = None,
     training_history_output_path: str | None = None,
     validation_history_output_path: str | None = None,
+    optimization_mode: Literal["deformation_field", "particle_shifts"] = "deformation_field",
+    initial_particle_shifts: torch.Tensor | None = None,
 ) -> dict[str, Any]:
     """Optimize prior hyperparameters using Nelder-Mead method.
 
@@ -527,6 +542,9 @@ def optimize_sigmas_2dtm_nelder_mead(
             prior_type=prior_type,
             sigma_params=sigma_params,
             sigma_a_exponential=sigma_a_exponential,
+            optimization_mode=optimization_mode,
+            initial_particle_shifts=initial_particle_shifts,
+            refine_config_path=refine_config_path,
         )
 
         # Compute validation loss
@@ -667,11 +685,18 @@ def optimize_sigmas_2dtm_nelder_mead(
             prior_type=prior_type,
             sigma_params=sigma_params,
             sigma_a_exponential=sigma_a_exponential,
+            optimization_mode=optimization_mode,
+            initial_particle_shifts=initial_particle_shifts,
+            refine_config_path=refine_config_path,
         )
-        final_deformation_field = deformation_field.data
-        final_deformation_field = final_deformation_field - torch.mean(
-            final_deformation_field, dim=(1, 2, 3), keepdim=True
-        )
+        # Handle return value - can be dict with particle_shifts or deformation_field
+        if isinstance(deformation_field, dict):
+            final_deformation_field = deformation_field
+        else:
+            final_deformation_field = deformation_field.data
+            final_deformation_field = final_deformation_field - torch.mean(
+                final_deformation_field, dim=(1, 2, 3), keepdim=True
+            )
 
         optimized_sigmas = sigma_params.copy()
 
@@ -711,11 +736,18 @@ def optimize_sigmas_2dtm_nelder_mead(
                 prior_type=prior_type,
                 sigma_params=sigma_params,
                 sigma_a_exponential=sigma_a_exponential,
+                optimization_mode=optimization_mode,
+                initial_particle_shifts=initial_particle_shifts,
+                refine_config_path=refine_config_path,
             )
-            final_deformation_field = deformation_field.data
-            final_deformation_field = final_deformation_field - torch.mean(
-                final_deformation_field, dim=(1, 2, 3), keepdim=True
-            )
+            # Handle return value - can be dict with particle_shifts or deformation_field
+            if isinstance(deformation_field, dict):
+                final_deformation_field = deformation_field
+            else:
+                final_deformation_field = deformation_field.data
+                final_deformation_field = final_deformation_field - torch.mean(
+                    final_deformation_field, dim=(1, 2, 3), keepdim=True
+                )
             optimized_sigmas = sigma_params.copy()
 
         # Print summary
@@ -828,6 +860,8 @@ def optimize_sigmas_2dtm_optuna(
     sigma_history_output_path: str | None = None,
     training_history_output_path: str | None = None,
     validation_history_output_path: str | None = None,
+    optimization_mode: Literal["deformation_field", "particle_shifts"] = "deformation_field",
+    initial_particle_shifts: torch.Tensor | None = None,
 ) -> dict[str, Any]:
     """Optimize prior hyperparameters using Optuna (Bayesian optimization).
 
@@ -947,12 +981,20 @@ def optimize_sigmas_2dtm_optuna(
         Path to save training loss history as JSON. Default None
     validation_history_output_path : str | None
         Path to save validation loss history as JSON. Default None
+    optimization_mode : Literal["deformation_field", "particle_shifts"]
+        Optimization mode. If "deformation_field", optimizes a deformation field grid.
+        If "particle_shifts", optimizes particle shifts directly (T, N, 2).
+        Default is "deformation_field".
+    initial_particle_shifts : torch.Tensor | None
+        Initial particle shifts with shape (T, N, 2) where T is number of frames
+        and N is number of particles. Only used if optimization_mode is "particle_shifts".
+        If None, initializes to zero shifts. Default is None.
 
     Returns
     -------
     dict
         - "optimized_sigmas": dict of optimized sigma values
-        - "final_deformation_field": final deformation field
+        - "final_deformation_field": final deformation field or dict with "particle_shifts"
         - "validation_loss_history": list of validation losses
         - "training_loss_history": list of training losses
         - "sigma_history": list of sigma values at each trial
@@ -1084,6 +1126,9 @@ def optimize_sigmas_2dtm_optuna(
             prior_type=prior_type,
             sigma_params=sigma_params,
             sigma_a_exponential=sigma_a_exponential,
+            optimization_mode=optimization_mode,
+            initial_particle_shifts=initial_particle_shifts,
+            refine_config_path=refine_config_path,
         )
 
         # Compute validation loss
@@ -1211,11 +1256,18 @@ def optimize_sigmas_2dtm_optuna(
             prior_type=prior_type,
             sigma_params=sigma_params,
             sigma_a_exponential=sigma_a_exponential,
+            optimization_mode=optimization_mode,
+            initial_particle_shifts=initial_particle_shifts,
+            refine_config_path=refine_config_path,
         )
-        final_deformation_field = deformation_field.data
-        final_deformation_field = final_deformation_field - torch.mean(
-            final_deformation_field, dim=(1, 2, 3), keepdim=True
-        )
+        # Handle return value - can be dict with particle_shifts or deformation_field
+        if isinstance(deformation_field, dict):
+            final_deformation_field = deformation_field
+        else:
+            final_deformation_field = deformation_field.data
+            final_deformation_field = final_deformation_field - torch.mean(
+                final_deformation_field, dim=(1, 2, 3), keepdim=True
+            )
 
         # Create optimized_sigmas from best trial parameters
         # (explicitly use best validation loss)
@@ -1267,7 +1319,7 @@ def optimize_sigmas_2dtm_optuna(
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
 def _compute_validation_loss_common(
-    deformation_field_to_use: CubicCatmullRomGrid3d,
+    deformation_field_to_use: CubicCatmullRomGrid3d | dict[str, torch.Tensor],
     batch_config_paths: list[str],
     batch_particle_indices: list[list[pd.Index]],
     batch_mean_stacks: dict[str, torch.Tensor],
@@ -1280,12 +1332,13 @@ def _compute_validation_loss_common(
     loss_metric: str,
     correlation_batch_size: int,
 ) -> float:
-    """Compute validation loss with current deformation field.
+    """Compute validation loss with current deformation field or particle_shifts.
 
     Parameters
     ----------
-    deformation_field_to_use : CubicCatmullRomGrid3d
-        Deformation field to evaluate
+    deformation_field_to_use : CubicCatmullRomGrid3d | dict[str, torch.Tensor]
+        Deformation field to evaluate, or dict with "particle_shifts" key containing
+        (T, N, 2) tensor
     batch_config_paths : list[str]
         List of batch config paths
     batch_particle_indices : list[list[pd.Index]]
@@ -1332,16 +1385,43 @@ def _compute_validation_loss_common(
             )
             batch_particle_stack = batch_refine_manager.particle_stack
 
-            image_stack_batch = batch_particle_stack.construct_image_stack_from_movie(
-                movie=image,
-                deformation_field=deformation_field_to_use,
-                pos_reference="top-left",
-                handle_bounds="pad",
-                padding_mode="reflect",
-                padding_value=0.0,
-                pre_exposure=pre_exposure,
-                fluence_per_frame=fluence_per_frame,
-            )
+            # Handle both deformation_field and particle_shifts
+            if isinstance(deformation_field_to_use, dict):
+                # Extract particle_shifts for this batch
+                particle_shifts = deformation_field_to_use["particle_shifts"]
+                # Compute batch start/end indices (same logic as in optimization loop)
+                batch_start_idx = sum(
+                    len(batch_particle_indices[i][0])
+                    for i in range(
+                        batch_config_paths.index(batch_config_path)
+                    )
+                )
+                batch_end_idx = batch_start_idx + batch_size
+                batch_particle_shifts = particle_shifts[
+                    :, batch_start_idx:batch_end_idx, :
+                ]
+                
+                image_stack_batch = batch_particle_stack.construct_image_stack_from_movie(
+                    movie=image,
+                    particle_shifts=batch_particle_shifts,
+                    pos_reference="top-left",
+                    handle_bounds="pad",
+                    padding_mode="reflect",
+                    padding_value=0.0,
+                    pre_exposure=pre_exposure,
+                    fluence_per_frame=fluence_per_frame,
+                )
+            else:
+                image_stack_batch = batch_particle_stack.construct_image_stack_from_movie(
+                    movie=image,
+                    deformation_field=deformation_field_to_use,
+                    pos_reference="top-left",
+                    handle_bounds="pad",
+                    padding_mode="reflect",
+                    padding_value=0.0,
+                    pre_exposure=pre_exposure,
+                    fluence_per_frame=fluence_per_frame,
+                )
 
             # Reuse pre-computed mean/std stacks (same as motion loop)
             batch_mean_stack = batch_mean_stacks[batch_config_path]
@@ -1588,13 +1668,27 @@ def _setup_prior_params(
 
     prior_params: dict[str, Any] = {}
 
+    # Determine number of time frames
+    if optimization_mode == "deformation_field":
+        assert deformation_field_resolution is not None
+        nt = deformation_field_resolution[0]
+    else:  # particle_shifts
+        nt = image.shape[0]
+
     if prior_type == "laplacian":
-        spatial_spacing, temporal_spacing = _compute_physical_spacing(
-            image.shape[-2:],
-            pixel_spacing,
-            deformation_field_resolution,
-            fluence_per_frame * image.shape[0],
-        )
+        if optimization_mode == "deformation_field":
+            assert deformation_field_resolution is not None
+            spatial_spacing, temporal_spacing = _compute_physical_spacing(
+                image.shape[-2:],
+                pixel_spacing,
+                deformation_field_resolution,
+                fluence_per_frame * image.shape[0],
+            )
+        else:  # particle_shifts
+            spatial_spacing = None
+            temporal_spacing = (
+                fluence_per_frame * image.shape[0] / nt if nt > 0 else None
+            )
         prior_params["spatial_spacing"] = spatial_spacing
         prior_params["temporal_spacing"] = temporal_spacing
 
@@ -1633,14 +1727,19 @@ def _setup_prior_params(
         prior_params["alpha"] = alpha
 
     elif prior_type == "relion":
-        image_coords = _build_physical_coords(
-            deformation_field_resolution[1],
-            deformation_field_resolution[2],
-            image.shape[-2:],
-            pixel_spacing,
-            device,
-        )
-        prior_params["image_coords"] = image_coords
+        if optimization_mode == "deformation_field":
+            assert deformation_field_resolution is not None
+            image_coords = _build_physical_coords(
+                nh=deformation_field_resolution[1],
+                nw=deformation_field_resolution[2],
+                image_shape=image.shape[-2:],
+                pixel_size=pixel_spacing,
+                device=device,
+            )
+            prior_params["image_coords"] = image_coords
+        else:  # particle_shifts
+            # image_coords will be set from particle_coords separately
+            prior_params["image_coords"] = None
 
         sigma_d_val = get_val("sigma_d")
         sigma_d_val = (
@@ -1652,10 +1751,11 @@ def _setup_prior_params(
         sigma_v_val = (
             sigma_v_val.item() if isinstance(sigma_v_val, torch.Tensor) else sigma_v_val
         )
+        total_fluence = fluence_per_frame * image.shape[0]
         sigma_v_norm = _normalize_sigma_fluence(
             sigma_v_val,
-            fluence_per_frame * image.shape[0],
-            deformation_field_resolution[0],
+            total_fluence,
+            nt,
         )
         prior_params["sigma_v_norm"] = sigma_v_norm
 
@@ -1673,8 +1773,8 @@ def _setup_prior_params(
             )
             offset = offset.item() if isinstance(offset, torch.Tensor) else offset
             sigma_a_tensor = _create_exponential_sigma_a(
-                fluence_per_frame * image.shape[0],
-                deformation_field_resolution[0],
+                total_fluence,
+                nt,
                 amplitude=amplitude,
                 decay_rate=decay_rate,
                 offset=offset,
@@ -1682,16 +1782,16 @@ def _setup_prior_params(
             )
             sigma_a_norm = _normalize_sigma_fluence(
                 sigma_a_tensor,
-                fluence_per_frame * image.shape[0],
-                deformation_field_resolution[0],
+                total_fluence,
+                nt,
             )
         else:
             sa = get_val("sigma_a")
             sa = sa.item() if isinstance(sa, torch.Tensor) else sa
             sigma_a_norm = _normalize_sigma_fluence(
                 sa,
-                fluence_per_frame * image.shape[0],
-                deformation_field_resolution[0],
+                total_fluence,
+                nt,
             )
         prior_params["sigma_a_norm"] = sigma_a_norm
 
@@ -2061,29 +2161,91 @@ def _run_inner_optimization_common(
 
     Returns
     -------
-    tuple[CubicCatmullRomGrid3d, float]
-        Tuple of (deformation_field, accumulated_loss)
+    tuple[CubicCatmullRomGrid3d | dict[str, torch.Tensor], float]
+        Tuple of (deformation_field or particle_shifts dict, accumulated_loss)
     """
-    # Initialize deformation field
-    if initial_deformation_field is None:
-        deformation_field_data = torch.zeros(
-            size=(2, *deformation_field_resolution), device=device, requires_grad=True
+    # Initialize optimization variable based on mode
+    particle_coords = None
+    if optimization_mode == "particle_shifts":
+        assert refine_config_path is not None, (
+            "refine_config_path is required for particle_shifts mode"
         )
-    else:
-        deformation_field_data = resample_deformation_field(
-            initial_deformation_field, deformation_field_resolution
-        )
-        deformation_field_data = deformation_field_data - torch.mean(
-            deformation_field_data, dim=(1, 2, 3), keepdim=True
-        )
-        deformation_field_data = deformation_field_data.detach().clone()
+        # Initialize particle_shifts
+        if initial_particle_shifts is None:
+            # Compute from initial_deformation_field if available
+            if initial_deformation_field is not None:
+                particle_shifts = compute_particle_shifts_from_deformation_field(
+                    deformation_field=initial_deformation_field,
+                    movie=image,
+                    refine_config_path=refine_config_path,
+                    pixel_spacing=pixel_spacing,
+                    grid_type="catmull_rom",  # Default grid type
+                    device=device,
+                    particle_indices=batch_particle_indices,
+                )
+                # Detach and require grad to make it a leaf tensor
+                particle_shifts = particle_shifts.detach().requires_grad_(True)
+            else:
+                # Initialize to zero if no deformation field provided
+                particle_shifts = torch.zeros(
+                    (image.shape[0], total_n_particles, 2),
+                    device=device,
+                    requires_grad=True,
+                )
+        else:
+            if initial_particle_shifts.shape[1] != total_n_particles:
+                raise ValueError(
+                    f"initial_particle_shifts shape[1] ({initial_particle_shifts.shape[1]}) "
+                    f"does not match total_n_particles ({total_n_particles})"
+                )
+            particle_shifts = initial_particle_shifts.to(device).requires_grad_(True)
 
-    deformation_field_data.requires_grad_(True)
-    deformation_field = CubicCatmullRomGrid3d.from_grid_data(deformation_field_data).to(
-        device
-    )
+        optimization_var = {
+            "variable": particle_shifts,
+            "type": "particle_shifts",
+            "optimizer_params": [particle_shifts],
+            "data": particle_shifts,
+        }
+
+        # Get particle coordinates for priors
+        refine_manager = _make_differentiable_refine_manager(refine_config_path)
+        particle_stack = refine_manager.particle_stack
+        particle_coords = _get_particle_coordinates(
+            particle_stack=particle_stack,
+            particle_indices=batch_particle_indices,
+            pixel_spacing=pixel_spacing,
+            device=device,
+        )
+    else:  # deformation_field
+        # Initialize deformation field
+        if initial_deformation_field is None:
+            deformation_field_data = torch.zeros(
+                size=(2, *deformation_field_resolution),
+                device=device,
+                requires_grad=True,
+            )
+        else:
+            deformation_field_data = resample_deformation_field(
+                initial_deformation_field, deformation_field_resolution
+            )
+            deformation_field_data = deformation_field_data - torch.mean(
+                deformation_field_data, dim=(1, 2, 3), keepdim=True
+            )
+            deformation_field_data = deformation_field_data.detach().clone()
+
+        deformation_field_data.requires_grad_(True)
+        deformation_field = CubicCatmullRomGrid3d.from_grid_data(
+            deformation_field_data
+        ).to(device)
+        optimization_var = {
+            "variable": deformation_field,
+            "type": "deformation_field",
+            "optimizer_params": deformation_field.parameters(),
+            "data": deformation_field._data,
+        }
+
     motion_optimizer = torch.optim.Adam(
-        deformation_field.parameters(), lr=optimizer_kwargs["lr"]
+        params=optimization_var["optimizer_params"], lr=optimizer_kwargs["lr"]
     )
 
     # Setup prior params
@@ -2102,6 +2264,33 @@ def _run_inner_optimization_common(
     # For particle_shifts with RELION prior, update image_coords with particle_coords
     if optimization_mode == "particle_shifts" and prior_type == "relion":
         prior_params["image_coords"] = particle_coords
+
+    # Pre-compute eigendecomposition for RELION prior (coords and sigmas don't change)
+    relion_lam = None
+    relion_vecs = None
+    if prior_type == "relion":
+        from ripple.core.motion_priors import relion2019_eigendecompose
+
+        # Determine which coords to use based on optimization mode
+        if optimization_mode == "particle_shifts":
+            assert particle_coords is not None, (
+                "particle_coords is required for particle_shifts mode with relion prior"
+            )
+            coords_for_eigen = particle_coords
+        else:
+            assert prior_params["image_coords"] is not None, (
+                "image_coords is required for deformation_field mode with relion prior"
+            )
+            coords_for_eigen = prior_params["image_coords"]
+
+        # Compute eigendecomposition once
+        # top_k=0.2 means keep top 20% of modes (default)
+        relion_lam, relion_vecs, _ = relion2019_eigendecompose(
+            coords_for_eigen,
+            prior_params["sigma_d_val"],
+            prior_params["sigma_v_norm"],
+            top_k=0.2,  # Keep top 20% of modes
+        )
 
     # Inner loop: motion optimization
     accumulated_loss = 0.0
@@ -2191,14 +2380,14 @@ def _run_inner_optimization_common(
             )
 
             # Compute priors based on optimization mode
-            if optimization_mode == "deformation_field":
-                field_data = optimization_var["data"]
-            else:  # particle_shifts
-                # Convert particle_shifts (T, N, 2) to field format (2, T, 1, N)
-                particle_shifts = optimization_var["data"]  # (T, N, 2)
-                field_data = particle_shifts.permute(2, 0, 1).unsqueeze(2)  # (2, T, 1, N)
-
             if prior_type == "laplacian":
+                if optimization_mode == "deformation_field":
+                    field_data = optimization_var["data"]
+                else:  # particle_shifts
+                    # For laplacian, still need to reshape to (2, T, N, 1)
+                    particle_shifts = optimization_var["variable"]  # (T, N, 2)
+                    field_data = particle_shifts.permute(2, 0, 1).unsqueeze(-1)  # (2, T, N, 1)
+                
                 e_space, e_time = laplacian_compute(
                     field_data,
                     prior_params["sigma_a_tensor"],
@@ -2207,18 +2396,33 @@ def _run_inner_optimization_common(
                     prior_params["temporal_spacing"],
                 )
             else:  # relion
-                coords = (
-                    particle_coords
-                    if optimization_mode == "particle_shifts"
-                    else prior_params["image_coords"]
-                )
-                e_space, e_time = relion2019_compute(
-                    field_data,
-                    coords,
-                    prior_params["sigma_d_val"],
-                    prior_params["sigma_v_norm"],
-                    prior_params["sigma_a_norm"],
-                )
+                if optimization_mode == "deformation_field":
+                    field_data = optimization_var["data"]
+                    coords = prior_params["image_coords"]
+                    e_space, e_time = relion2019_compute(
+                        field_data,
+                        coords,
+                        prior_params["sigma_d_val"],
+                        prior_params["sigma_v_norm"],
+                        prior_params["sigma_a_norm"],
+                        lam=relion_lam,
+                        vecs=relion_vecs,
+                        is_particle_shifts=False,
+                    )
+                else:  # particle_shifts
+                    particle_shifts = optimization_var["variable"]  # (T, N, 2)
+                    # Ensure particle_coords matches particle_shifts dtype
+                    particle_coords_matched = particle_coords.to(dtype=particle_shifts.dtype)
+                    e_space, e_time = relion2019_compute(
+                        particle_shifts,  # (T, N, 2) - pass directly
+                        particle_coords_matched,
+                        prior_params["sigma_d_val"],
+                        prior_params["sigma_v_norm"],
+                        prior_params["sigma_a_norm"],
+                        lam=relion_lam,
+                        vecs=relion_vecs,
+                        is_particle_shifts=True,  # Indicate this is particle_shifts format
+                    )
 
             weight = batch_size / total_n_particles
             e_space = e_space * weight
