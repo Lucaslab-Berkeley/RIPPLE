@@ -32,6 +32,7 @@ from .motion_priors import (
     _build_physical_coords,
     _compute_physical_spacing,
     _create_exponential_sigma_a,
+    relion2019_eigendecompose,
     _normalize_sigma_fluence,
     laplacian_compute,
     relion2019_compute,
@@ -595,6 +596,8 @@ def estimate_local_motion_2dtm_bayesian(
             alpha_spatial=alpha_spatial,
             spatial_spacing=spatial_spacing,
             temporal_spacing=temporal_spacing,
+            relion_lam=None,
+            relion_vecs=None,
         )
 
         motion_optimizer.zero_grad()
@@ -746,6 +749,20 @@ def estimate_local_motion_2dtm_particles_bayesian(
     sigma_a_offset: float
         Constant offset in exponential sigma_a formula:
         amplitude*exp(-decay_rate*fluence) + offset. Default is 1.0.
+    optimization_mode: Literal["deformation_field", "particle_shifts"]
+        Optimization mode: "deformation_field" optimizes a grid-based deformation
+        field, "particle_shifts" optimizes per-particle, per-frame shifts directly.
+        Default is "deformation_field".
+    initial_particle_shifts: torch.Tensor | None
+        Initial particle shifts with shape (T, N, 2) where T is number of frames,
+        N is number of particles, and 2 corresponds to (y, x) shifts. Only used
+        when optimization_mode is "particle_shifts". If None and optimization_mode
+        is "particle_shifts", initial shifts are computed from initial_deformation_field.
+        Default is None.
+    grid_type: Literal["catmull_rom", "bspline"]
+        Type of spline grid to use for deformation field representation.
+        Only used when optimization_mode is "deformation_field".
+        Default is "catmull_rom".
 
     Returns
     -------
@@ -903,13 +920,11 @@ def estimate_local_motion_2dtm_particles_bayesian(
         mean_image=mean_image,
         var_image=var_image,
     )
-    
+
     # Pre-compute eigendecomposition for RELION prior (coords and sigmas don't change)
     relion_lam = None
     relion_vecs = None
     if prior_type == "relion":
-        from ripple.core.motion_priors import relion2019_eigendecompose
-        
         # Determine which coords to use based on optimization mode
         if optimization_mode == "particle_shifts":
             assert particle_coords is not None, (
@@ -921,7 +936,7 @@ def estimate_local_motion_2dtm_particles_bayesian(
                 "image_coords is required for deformation_field mode with relion prior"
             )
             coords_for_eigen = image_coords
-        
+
         # Compute eigendecomposition once
         # top_k=0.2 means keep top 20% of modes (default)
         relion_lam, relion_vecs, _ = relion2019_eigendecompose(
@@ -930,7 +945,7 @@ def estimate_local_motion_2dtm_particles_bayesian(
             sigma_v_norm,
             top_k=0.2,  # Keep top 20% of modes
         )
-    
+
     # Use try-finally to ensure cleanup of temp directory
     try:
         for iter_idx in pbar:
@@ -958,7 +973,7 @@ def estimate_local_motion_2dtm_particles_bayesian(
                     f"{intermediate_fields_dir}/particle_shifts_iter_{iter_idx}.csv",
                     index=False,
                 )
-            
+
             if save_intermediate_fields:
                 if optimization_mode == "deformation_field":
                     write_deformation_field_to_csv(
@@ -1079,6 +1094,8 @@ def estimate_local_motion_2dtm_particles_bayesian(
                     alpha_spatial=alpha_spatial,
                     spatial_spacing=spatial_spacing,
                     temporal_spacing=temporal_spacing,
+                    relion_lam=relion_lam,
+                    relion_vecs=relion_vecs,
                 )
                 accumulated_loss += batch_loss.item()
                 print(f"batch_loss: {batch_loss.item()}")
@@ -1397,9 +1414,9 @@ def _compute_loss(
 
     else:  # particle_shifts
         # For particle_shifts, we have (T, N, 2) where T is frames and N is particles
-        # particle_shifts are shifts per frame relative to a common reference (like deformation_field)
+        # particle_shifts are shifts per frame relative to a common reference
         # The difference between consecutive frames gives velocity
-        # Use "variable" directly to ensure we get the current value after optimizer steps
+        # Use "variable" directly to ensure we get the current value 
         particle_shifts = optimization_var["variable"]  # (T, N, 2)
 
         if prior_type == "relion":
@@ -1409,10 +1426,10 @@ def _compute_loss(
             assert particle_coords is not None, (
                 "particle_coords is required for particle_shifts mode with relion prior"
             )
-            
+
             # Ensure particle_coords matches particle_shifts dtype
             particle_coords_matched = particle_coords.to(dtype=particle_shifts.dtype)
-            
+
             e_space, e_time = relion2019_compute(
                 field=particle_shifts,  # (T, N, 2) - pass directly
                 coords=particle_coords_matched,  # (N, 2)
