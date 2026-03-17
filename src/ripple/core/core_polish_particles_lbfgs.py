@@ -541,6 +541,9 @@ def estimate_local_motion_2dtm_lbfgs(
     new_deformation_field = CubicCatmullRomGrid3d(
         resolution=deformation_field_resolution, n_channels=2
     ).to(device)
+    # Ensure parameters are contiguous for L-BFGS
+    for param in new_deformation_field.parameters():
+        param.data = param.data.contiguous()
     print("New deformation field made")
 
     # Setup prior-specific parameters
@@ -575,7 +578,7 @@ def estimate_local_motion_2dtm_lbfgs(
             image_coords,
             sigma_d,
             sigma_v_norm,
-            top_k=0.2,
+            variance_threshold=0.999,  # Keep modes accounting for 99.9% of variance
         )
 
     # Create L-BFGS optimizer
@@ -961,6 +964,9 @@ def estimate_local_motion_2dtm_particles_lbfgs(
         )
     else:  # deformation_field
         deformation_field = setup_result["deformation_field"]
+        # Ensure parameters are contiguous for L-BFGS
+        for param in deformation_field.parameters():
+            param.data = param.data.contiguous()
         optimization_var = {
             "variable": deformation_field,
             "type": "deformation_field",
@@ -1028,7 +1034,7 @@ def estimate_local_motion_2dtm_particles_lbfgs(
             coords_for_eigen,
             sigma_d,
             sigma_v_norm,
-            top_k=0.2,
+            variance_threshold=0.999,  # Keep modes accounting for 99.9% of variance
         )
 
     # Training loop

@@ -285,12 +285,34 @@ def _compute_physical_spacing(
 # 1) EXACT RELION 2019 PRIOR (Exponential kernel)  --------------------------
 # --------------------------------------------------------------------------
 
+def choose_top_k_from_variance(lam, threshold=0.98):
+    """Choose top k modes based on cumulative variance threshold.
+
+    Parameters
+    ----------
+    lam : torch.Tensor
+        Eigenvalues (R,)
+    threshold : float, optional
+        Cumulative variance threshold (0-1). Default is 0.95.
+
+    Returns
+    -------
+    int
+        Number of modes to keep
+    """
+    lam_sorted = torch.sort(lam, descending=True).values
+    cumulative = torch.cumsum(lam_sorted, dim=0)
+    total = cumulative[-1]
+    k = torch.searchsorted(cumulative, threshold * total).item() + 1
+    percentage = (k / lam.shape[0]) * 100.0
+    print(f"Keeping {k} modes from {lam.shape[0]} modes ({percentage:.1f}%), with threshold {threshold}")
+    return k
 
 def relion2019_eigendecompose(
     coords: torch.Tensor,
     sigma_d: float,
     sigma_v: float,
-    top_k: float | None = 0.2,
+    variance_threshold: float | None = 0.999,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Eigendecomposes the exponential kernel.
@@ -303,9 +325,9 @@ def relion2019_eigendecompose(
         Spatial correlation length
     sigma_v : float
         Velocity magnitude scale
-    top_k : float | None, optional
-        Fraction of modes to keep (between 0 and 1). If None, keeps all modes.
-        Default is 0.2 (keeps top 20% of modes).
+    variance_threshold : float | None, optional
+        Cumulative variance threshold (between 0 and 1). If None, keeps all modes.
+        Default is 0.999 (keeps modes accounting for 99.9% of variance).
 
     Returns
     -------
@@ -326,18 +348,15 @@ def relion2019_eigendecompose(
     vals = vals[idx]
     vecs = vecs[:, idx]
 
-    # Truncate to top_k fraction of modes
-    if top_k is not None:
-        num_points = coords.shape[0]
-        k = int(top_k * num_points)
-        # Ensure at least 1 mode and at most num_points modes
-        k = max(1, min(k, num_points))
+    # Clamp eigenvalues to be non-negative (numerical errors can cause small negatives)
+    vals = torch.clamp(vals, min=0.0)
+
+    # Truncate to modes accounting for variance_threshold of cumulative variance
+    if variance_threshold is not None:
+        k = choose_top_k_from_variance(vals, threshold=variance_threshold)
         if k < len(vals):
             vals = vals[:k]
             vecs = vecs[:, :k]
-
-    # Clamp eigenvalues to be non-negative (numerical errors can cause small negatives)
-    vals = torch.clamp(vals, min=0.0)
 
     # basis b_i = sqrt(lambda_i) * w_i  (Eq. 3)
     basis_vectors = vecs * torch.sqrt(vals + 1e-12)
@@ -683,7 +702,7 @@ def relion2019_compute(
     sigma_d: float,
     sigma_v: float,
     sigma_a: float | torch.Tensor,
-    top_k: float | None = 0.2,
+    variance_threshold: float | None = 0.999,
     lam: torch.Tensor | None = None,
     vecs: torch.Tensor | None = None,
     is_particle_shifts: bool = False,
@@ -704,9 +723,9 @@ def relion2019_compute(
         Velocity magnitude scale
     sigma_a : float
         Acceleration scale
-    top_k : float | None, optional
-        Fraction of modes to keep (between 0 and 1). If None, keeps all modes.
-        Default is 0.2 (keeps top 20% of modes).
+    variance_threshold : float | None, optional
+        Cumulative variance threshold (between 0 and 1). If None, keeps all modes.
+        Default is 0.999 (keeps modes accounting for 99.9% of variance).
     lam : torch.Tensor | None, optional
         Precomputed eigenvalues (R,). If None, will be computed from coords, sigma_d, sigma_v.
     vecs : torch.Tensor | None, optional
@@ -753,7 +772,9 @@ def relion2019_compute(
 
     # eigendecompose Σ_V (only if not provided)
     if lam is None or vecs is None:
-        lam, vecs, _ = relion2019_eigendecompose(coords, sigma_d, sigma_v, top_k)
+        lam, vecs, _ = relion2019_eigendecompose(
+            coords, sigma_d, sigma_v, variance_threshold
+        )
     # lam: (R,) - eigenvalues (R ≤ P, possibly truncated)
     # vecs: (P, R) - eigenvectors (each column is one eigenvector)
     # B: (P, R) - basis vectors
@@ -868,3 +889,37 @@ def laplacian_compute(
     e_space = laplacian_e_space(field, alpha, spatial_spacing)
     e_time = laplacian_e_time(field, sigma_a, temporal_spacing)
     return e_space, e_time
+
+
+def motion_evidence_score(
+    e_map: torch.Tensor,
+    lam: torch.Tensor,
+    sigma_a: float | torch.Tensor,
+) -> torch.Tensor:
+    """
+    Approximate marginal likelihood score for motion hyperparameters.
+    """
+
+    lam = lam.view(1, -1, 1)
+
+    if isinstance(sigma_a, torch.Tensor) and sigma_a.ndim > 0:
+        sigma_a_sq = sigma_a.view(-1, 1, 1) ** 2
+    else:
+        sigma_a_sq = sigma_a ** 2
+
+    # TODO: Have a particle weight
+    # Higher CC particles are trusted more
+    # Trust particles with sharper peaks more
+
+
+    # posterior precision
+    precision = 1.0 + lam / sigma_a_sq
+
+    # Occam penalty (log det Hessian)
+    logdet = torch.mean(torch.log(precision))
+
+    # Evidence
+    score = -e_map - 0.5 * logdet
+
+    return score
+

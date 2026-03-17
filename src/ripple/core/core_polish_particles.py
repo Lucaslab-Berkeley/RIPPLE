@@ -938,12 +938,12 @@ def estimate_local_motion_2dtm_particles_bayesian(
             coords_for_eigen = image_coords
 
         # Compute eigendecomposition once
-        # top_k=0.2 means keep top 20% of modes (default)
+        # variance_threshold=0.999 means keep modes accounting for 99.9% of variance
         relion_lam, relion_vecs, _ = relion2019_eigendecompose(
             coords_for_eigen,
             sigma_d,
             sigma_v_norm,
-            top_k=0.2,  # Keep top 20% of modes
+            variance_threshold=0.999,  # Keep modes accounting for 99.9% of variance
         )
 
     # Use try-finally to ensure cleanup of temp directory

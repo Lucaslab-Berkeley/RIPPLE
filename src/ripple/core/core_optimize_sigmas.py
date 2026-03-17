@@ -597,7 +597,7 @@ def optimize_sigmas_2dtm_nelder_mead(
             sigma_params[param_name] = float(x[i])
 
         # Run inner optimization with current sigmas
-        deformation_field, accumulated_loss = _run_inner_optimization_common(
+        result = _run_inner_optimization_common(
             initial_deformation_field=initial_deformation_field,
             deformation_field_resolution=deformation_field_resolution,
             device=device,
@@ -627,6 +627,11 @@ def optimize_sigmas_2dtm_nelder_mead(
             convergence_threshold=convergence_threshold,
             num_convergence_iterations=num_convergence_iterations,
         )
+        # Unpack result (handles both old and new return format)
+        if len(result) == 3:
+            deformation_field, accumulated_loss, _ = result
+        else:
+            deformation_field, accumulated_loss = result
 
         # Compute validation loss
         # Use validation batch configs if available,
@@ -745,7 +750,7 @@ def optimize_sigmas_2dtm_nelder_mead(
         for i, param_name in enumerate(param_names):
             sigma_params[param_name] = float(optimized_values[i])
         # Get final deformation field with optimized parameters
-        deformation_field, _ = _run_inner_optimization_common(
+        result = _run_inner_optimization_common(
             initial_deformation_field=initial_deformation_field,
             deformation_field_resolution=deformation_field_resolution,
             device=device,
@@ -775,6 +780,11 @@ def optimize_sigmas_2dtm_nelder_mead(
             convergence_threshold=convergence_threshold,
             num_convergence_iterations=num_convergence_iterations,
         )
+        # Unpack result (handles both old and new return format)
+        if len(result) == 3:
+            deformation_field, _, _ = result
+        else:
+            deformation_field, _ = result
         # Handle return value - can be dict with particle_shifts or deformation_field
         if isinstance(deformation_field, dict):
             final_deformation_field = deformation_field
@@ -801,7 +811,7 @@ def optimize_sigmas_2dtm_nelder_mead(
             for name, best_val in best_sigma_params.items():
                 sigma_params[name] = best_val
             # Re-run inner optimization with best parameters
-            deformation_field, _ = _run_inner_optimization_common(
+            result = _run_inner_optimization_common(
                 initial_deformation_field=initial_deformation_field,
                 deformation_field_resolution=deformation_field_resolution,
                 device=device,
@@ -826,6 +836,11 @@ def optimize_sigmas_2dtm_nelder_mead(
                 initial_particle_shifts=initial_particle_shifts,
                 refine_config_path=refine_config_path,
             )
+            # Unpack result (handles both old and new return format)
+            if len(result) == 3:
+                deformation_field, _, _ = result
+            else:
+                deformation_field, _ = result
             # Handle return value - can be dict with particle_shifts or deformation_field
             if isinstance(deformation_field, dict):
                 final_deformation_field = deformation_field
@@ -1206,7 +1221,7 @@ def optimize_sigmas_2dtm_optuna(
             sigma_params[param_name] = suggested_val
 
         # Run inner optimization with suggested sigmas
-        deformation_field, accumulated_loss = _run_inner_optimization_common(
+        result = _run_inner_optimization_common(
             initial_deformation_field=initial_deformation_field,
             deformation_field_resolution=deformation_field_resolution,
             device=device,
@@ -1236,6 +1251,12 @@ def optimize_sigmas_2dtm_optuna(
             convergence_threshold=convergence_threshold,
             num_convergence_iterations=num_convergence_iterations,
         )
+
+        # Unpack result (handles both old and new return format)
+        if len(result) == 3:
+            deformation_field, accumulated_loss, _ = result
+        else:
+            deformation_field, accumulated_loss = result
 
         # Compute validation loss
         # Use validation batch configs if available,
@@ -1341,7 +1362,7 @@ def optimize_sigmas_2dtm_optuna(
             sigma_params[name] = val
 
         # Get final deformation field with best parameters
-        deformation_field, _ = _run_inner_optimization_common(
+        result = _run_inner_optimization_common(
             initial_deformation_field=initial_deformation_field,
             deformation_field_resolution=deformation_field_resolution,
             device=device,
@@ -1371,6 +1392,11 @@ def optimize_sigmas_2dtm_optuna(
             convergence_threshold=convergence_threshold,
             num_convergence_iterations=num_convergence_iterations,
         )
+        # Unpack result (handles both old and new return format)
+        if len(result) == 3:
+            deformation_field, _, _ = result
+        else:
+            deformation_field, _ = result
         # Handle return value - can be dict with particle_shifts or deformation_field
         if isinstance(deformation_field, dict):
             final_deformation_field = deformation_field
@@ -2229,7 +2255,10 @@ def _run_inner_optimization_common(
     lbfgs_line_search_fn: str | None = "strong_wolfe",
     convergence_threshold: float = 0.0005,
     num_convergence_iterations: int = 5,
-) -> tuple[CubicCatmullRomGrid3d | dict[str, torch.Tensor], float]:
+) -> (
+    tuple[CubicCatmullRomGrid3d | dict[str, torch.Tensor], float]
+    | tuple[CubicCatmullRomGrid3d | dict[str, torch.Tensor], float, dict[str, Any]]
+):
     """Run inner motion optimization loop with current sigma parameters.
 
     Parameters
@@ -2363,6 +2392,10 @@ def _run_inner_optimization_common(
         deformation_field = CubicCatmullRomGrid3d.from_grid_data(
             deformation_field_data
         ).to(device)
+        # Ensure parameters are contiguous for L-BFGS
+        if optimizer_type == "lbfgs":
+            for param in deformation_field.parameters():
+                param.data = param.data.contiguous()
         optimization_var = {
             "variable": deformation_field,
             "type": "deformation_field",
@@ -2419,12 +2452,12 @@ def _run_inner_optimization_common(
             coords_for_eigen = prior_params["image_coords"]
 
         # Compute eigendecomposition once
-        # top_k=0.2 means keep top 20% of modes (default)
+        # variance_threshold=0.999 means keep modes accounting for 99.9% of variance
         relion_lam, relion_vecs, _ = relion2019_eigendecompose(
             coords_for_eigen,
             prior_params["sigma_d_val"],
             prior_params["sigma_v_norm"],
-            top_k=0.2,  # Keep top 20% of modes
+            variance_threshold=0.999,  # Keep modes accounting for 99.9% of variance
         )
 
     # Inner loop: motion optimization
@@ -2781,6 +2814,35 @@ def _run_inner_optimization_common(
 
         # Clean up optimizer
         del motion_optimizer, optimization_var
+
+        deformation_field_clean = CubicCatmullRomGrid3d.from_grid_data(
+            final_deformation_data
+        ).to(device)
+
+        # Return evidence score components if RELION prior
+        if prior_type == "relion" and relion_lam is not None:
+            e_map_tensor = torch.tensor(
+                accumulated_loss, device=relion_lam.device, dtype=relion_lam.dtype
+            )
+            # Extract sigma_a before cleanup
+            sigma_a_value = prior_params["sigma_a_norm"]
+            # Clean up prior params
+            del prior_params["image_coords"]
+            if isinstance(prior_params["sigma_a_norm"], torch.Tensor):
+                del prior_params["sigma_a_norm"]
+            gc.collect()
+            torch.cuda.empty_cache()
+            return (
+                deformation_field_clean,
+                accumulated_loss,
+                {
+                    "relion_lam": relion_lam,
+                    "sigma_a": sigma_a_value,
+                    "e_map": e_map_tensor,
+                },
+            )
+        
+        # Clean up prior params for non-RELION or when not returning evidence info
         if prior_type == "laplacian":
             if isinstance(prior_params["sigma_a_tensor"], torch.Tensor):
                 del prior_params["sigma_a_tensor"]
@@ -2788,28 +2850,46 @@ def _run_inner_optimization_common(
             del prior_params["image_coords"]
             if isinstance(prior_params["sigma_a_norm"], torch.Tensor):
                 del prior_params["sigma_a_norm"]
-
+        
         gc.collect()
         torch.cuda.empty_cache()
-
-        deformation_field_clean = CubicCatmullRomGrid3d.from_grid_data(
-            final_deformation_data
-        ).to(device)
-
         return deformation_field_clean, accumulated_loss
     else:  # particle_shifts
         final_particle_shifts = optimization_var["variable"].detach().clone()
 
         # Clean up optimizer
         del motion_optimizer, optimization_var
+
+        # Return evidence score components if RELION prior
+        if prior_type == "relion" and relion_lam is not None:
+            e_map_tensor = torch.tensor(
+                accumulated_loss, device=relion_lam.device, dtype=relion_lam.dtype
+            )
+            # Extract sigma_a before cleanup
+            sigma_a_value = prior_params["sigma_a_norm"]
+            # Clean up prior params
+            if isinstance(prior_params["sigma_a_norm"], torch.Tensor):
+                del prior_params["sigma_a_norm"]
+            gc.collect()
+            torch.cuda.empty_cache()
+            return (
+                {"particle_shifts": final_particle_shifts},
+                accumulated_loss,
+                {
+                    "relion_lam": relion_lam,
+                    "sigma_a": sigma_a_value,
+                    "e_map": e_map_tensor,
+                },
+            )
+        
+        # Clean up prior params for non-RELION or when not returning evidence info
         if prior_type == "laplacian":
             if isinstance(prior_params["sigma_a_tensor"], torch.Tensor):
                 del prior_params["sigma_a_tensor"]
         else:
             if isinstance(prior_params["sigma_a_norm"], torch.Tensor):
                 del prior_params["sigma_a_norm"]
-
+        
         gc.collect()
         torch.cuda.empty_cache()
-
         return {"particle_shifts": final_particle_shifts}, accumulated_loss
