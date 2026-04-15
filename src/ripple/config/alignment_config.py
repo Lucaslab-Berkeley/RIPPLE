@@ -2,8 +2,13 @@
 
 from typing import Annotated, Literal
 
-import torch
 from pydantic import Field, field_validator
+from torch_motion_correction import (
+    DeformationField,
+    FourierFilterConfig,
+    PatchSamplingConfig,
+)
+from torch_motion_correction import OptimizationConfig as MotionOptimizationConfig
 
 from ripple.utils.custom_types import BaseModelRIPPLE
 from ripple.utils.data_io import load_deformation_field
@@ -22,10 +27,10 @@ class BaseAlignmentConfig(BaseModelRIPPLE):
     Parameters
     ----------
     deformation_field_resolution: tuple[int, int, int]
-        Resolution of the deformation field in pixels (x, y, z).
+        Resolution of the deformation field in pixels (nt, nh, nw).
     deformation_field_path: Optional[str]
-        Path to the deformation field file. If None, the deformation field will be
-        initialized to zero.
+        Path to the deformation field CSV file. If None, the backend initialises
+        shifts to zero.
     n_iterations: int
         Number of optimization iterations. Default is 100.
     grid_type: Literal["catmull_rom", "bspline"]
@@ -48,11 +53,41 @@ class BaseAlignmentConfig(BaseModelRIPPLE):
     skip_movie_preparation: bool = False
 
     @property
-    def deformation_field(self) -> torch.Tensor:
-        """Get the deformation field tensor."""
+    def initial_deformation_field(self) -> DeformationField | None:
+        """Load and wrap the saved deformation field, or None to start from zero.
+
+        Returns
+        -------
+        DeformationField | None
+            - If no deformation_field_path is set, returns None to indicate to backend
+            that shifts should be initialized to zero.
+            - If a path is set, loads the tensor and wrapped into a
+            :class:`~torch_motion_correction.DeformationField` so that the ``grid_type``
+            travels with the data.
+        """
         if self.deformation_field_path is None:
-            return torch.zeros(self.deformation_field_resolution, dtype=torch.float32)
-        return load_deformation_field(self.deformation_field_path)
+            return None
+
+        data = load_deformation_field(self.deformation_field_path)
+
+        return DeformationField(data=data, grid_type=self.grid_type)
+
+    @property
+    def as_optimization_config(self) -> MotionOptimizationConfig:
+        """Build a :class:`~torch_motion_correction.OptimizationConfig`.
+
+        Returns
+        -------
+        MotionOptimizationConfig
+            The optimization config object to be passed to the motion correction
+            backend.
+        """
+        return MotionOptimizationConfig(
+            n_iterations=self.n_iterations,
+            optimizer_type=self.optimizer_type,
+            grid_type=self.grid_type,
+            optimizer_kwargs={"lr": self.learning_rate},
+        )
 
 
 class AlignFramesConfig(BaseAlignmentConfig):
@@ -113,6 +148,35 @@ class AlignFramesConfig(BaseAlignmentConfig):
                 f"got {v[0]} <= {v[1]}"
             )
         return v
+
+    # --- Backend config accessors --------------------------------------------
+
+    @property
+    def as_patch_sampling_config(self) -> PatchSamplingConfig:
+        """Build a :class:`~torch_motion_correction.PatchSamplingConfig`."""
+        return PatchSamplingConfig(patch_shape=self.patch_shape)
+
+    @property
+    def as_fourier_filter_config(self) -> FourierFilterConfig:
+        """Build a :class:`~torch_motion_correction.FourierFilterConfig`."""
+        return FourierFilterConfig(
+            b_factor=self.b_factor,
+            frequency_range=self.frequency_range,
+        )
+
+    @property
+    def as_optimization_config(self) -> MotionOptimizationConfig:
+        """Build a :class:`~torch_motion_correction.OptimizationConfig`.
+
+        Extends the base implementation to include ``loss_type``.
+        """
+        return MotionOptimizationConfig(
+            n_iterations=self.n_iterations,
+            optimizer_type=self.optimizer_type,
+            loss_type=self.loss_type,
+            grid_type=self.grid_type,
+            optimizer_kwargs={"lr": self.learning_rate},
+        )
 
 
 class PriorConfig(BaseModelRIPPLE):
