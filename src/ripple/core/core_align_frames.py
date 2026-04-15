@@ -1,12 +1,16 @@
 """Core function for aligning frames of a cryo-EM movie."""
 
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Optional
 
 import torch
 from torch_motion_correction import (
+    DeformationField,
+    FourierFilterConfig,
+    PatchSamplingConfig,
     correct_motion,
     estimate_local_motion,
 )
+from torch_motion_correction import OptimizationConfig as MotionOptimizationConfig
 
 from .prepare_movie import prepare_core
 
@@ -14,45 +18,38 @@ if TYPE_CHECKING:
     from torch_motion_correction import OptimizationTracker
 
 
-# pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
 def core_align_frames(
     movie: torch.Tensor,
-    deformation_field: torch.Tensor,
+    initial_deformation_field: DeformationField | None,
     gain_map: torch.Tensor | None,
     dark_map: torch.Tensor | None,
     gain_flip: int,
     gain_rot: int,
     pixel_size: float,
     deformation_field_resolution: tuple[int, int, int],
-    patch_shape: tuple[int, int],
+    patch_sampling: PatchSamplingConfig,
+    fourier_filter: FourierFilterConfig,
+    optimization: MotionOptimizationConfig,
     multiply_gain: bool = True,
     loss_trajectories: bool = False,
     skip_movie_preparation: bool = False,
-    n_iterations: int = 100,
-    grid_type: Literal["catmull_rom", "bspline"] = "catmull_rom",
-    loss_type: Literal["mse", "cc", "ncc"] = "mse",
-    optimizer_type: Literal["adam", "lbfgs"] = "adam",
-    b_factor: float = 500,
-    frequency_range: tuple[float, float] = (300, 10),
-    optimizer_kwargs: dict[str, Any] | None = None,
     do_correct_motion: bool = True,
     device: torch.device = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional["OptimizationTracker"]]:
-    """
-    Core function for aligning frames of a cryo-EM movie.
+) -> tuple[
+    torch.Tensor, DeformationField, torch.Tensor, Optional["OptimizationTracker"]
+]:
+    """Core function for aligning frames of a cryo-EM movie.
 
     Parameters
     ----------
     movie: torch.Tensor
         The movie to align.
-    deformation_field: torch.Tensor
-        The deformation field to use for alignment.
+    initial_deformation_field: DeformationField | None
+        Starting deformation field. Pass None to initialise shifts from zero.
     gain_map: torch.Tensor | None
-        The gain map to apply to the movie. If None, the gain map will be
-        initialized to zero.
-    dark_map: Optional[torch.Tensor]
-        The dark map to apply to the movie. If None, the dark map will be
-        initialized to zero.
+        The gain map to apply to the movie.
+    dark_map: torch.Tensor | None
+        The dark map to apply to the movie.
     gain_flip: int
         The flip to apply to the gain map.
     gain_rot: int
@@ -60,41 +57,28 @@ def core_align_frames(
     pixel_size: float
         The pixel size in Angstroms per pixel.
     deformation_field_resolution: tuple[int, int, int]
-        The resolution of the deformation field in pixels (x, y, z).
-    patch_shape: tuple[int, int]
-        The shape of the patch in pixels (width, height).
+        Resolution of the deformation field (nt, nh, nw).
+    patch_sampling: PatchSamplingConfig
+        Patch extraction configuration (shape and overlap).
+    fourier_filter: FourierFilterConfig
+        Fourier-space filtering parameters (b_factor and frequency_range).
+    optimization: MotionOptimizationConfig
+        Gradient-based optimisation hyper-parameters.
     multiply_gain: bool
-        Whether to multiply the movie by the gain map or divide the movie by the
-        gain map.
+        Whether to multiply (True) or divide (False) by the gain map.
     loss_trajectories: bool
-        Whether to return the trajectory of the alignment.
+        Whether to return the optimisation trajectory.
     skip_movie_preparation: bool
-        Whether to skip the movie preparation step.
-    n_iterations: int
-        The number of iterations to run the alignment.
-    grid_type: Literal["catmull_rom", "bspline"]
-        The type of grid to use for the alignment.
-    loss_type: Literal["mse", "cc", "ncc"]
-        The type of loss function to use for the alignment.
-    optimizer_type: Literal["adam", "lbfgs"]
-        The type of optimizer to use for the alignment.
-    b_factor: float
-        The b-factor to use for the alignment.
-    frequency_range: tuple[float, float]
-        The frequency range to use for the alignment.
-    optimizer_kwargs: dict[str, Any] | None
-        The optimizer kwargs to use for the alignment. If None, defaults to
-        {"lr": 0.2}.
+        Whether to skip gain/dark correction.
     do_correct_motion: bool
-        Whether to correct the motion.
+        Whether to warp the movie with the estimated deformation field.
     device: torch.device
-        The device to use for the alignment.
+        Device to use for computation.
 
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional["OptimizationTracker"]]
-        Tuple of
-        (corrected_movie, updated_deformation_field, movie_prepared, trajectory).
+    tuple[torch.Tensor, DeformationField, torch.Tensor, OptimizationTracker | None]
+        (corrected_movie, updated_deformation_field, movie_prepared, trajectory)
     """
     torch.set_grad_enabled(True)
     movie_prepared = prepare_core(
@@ -106,47 +90,28 @@ def core_align_frames(
         multiply_gain,
         skip_movie_preparation,
     )
-    # estimate the motion
+
+    result = estimate_local_motion(
+        image=movie_prepared,
+        pixel_spacing=pixel_size,
+        deformation_field_resolution=deformation_field_resolution,
+        patch_sampling=patch_sampling,
+        initial_deformation_field=initial_deformation_field,
+        fourier_filter=fourier_filter,
+        optimization=optimization,
+        return_trajectory=loss_trajectories,
+    )
+
     if loss_trajectories:
-        updated_deformation_field, trajectory = estimate_local_motion(
-            image=movie_prepared,
-            pixel_spacing=pixel_size,
-            deformation_field_resolution=deformation_field_resolution,
-            initial_deformation_field=deformation_field,
-            patch_shape=patch_shape,
-            n_iterations=n_iterations,
-            optimizer_type=optimizer_type,
-            grid_type=grid_type,
-            optimizer_kwargs=optimizer_kwargs,
-            b_factor=b_factor,
-            frequency_range=frequency_range,
-            loss_type=loss_type,
-            return_trajectory=loss_trajectories,
-        )
+        updated_deformation_field, trajectory = result
     else:
-        updated_deformation_field = estimate_local_motion(
-            image=movie_prepared,
-            pixel_spacing=pixel_size,
-            deformation_field_resolution=deformation_field_resolution,
-            initial_deformation_field=deformation_field,
-            patch_shape=patch_shape,
-            n_iterations=n_iterations,
-            optimizer_type=optimizer_type,
-            grid_type=grid_type,
-            optimizer_kwargs=optimizer_kwargs,
-            b_factor=b_factor,
-            frequency_range=frequency_range,
-            loss_type=loss_type,
-            return_trajectory=loss_trajectories,
-        )
-        trajectory = None
-    # correct the motion
+        updated_deformation_field, trajectory = result, None
+
     if do_correct_motion:
         corrected_movie = correct_motion(
             image=movie_prepared,
-            deformation_grid=updated_deformation_field,
+            deformation_field=updated_deformation_field,
             pixel_spacing=pixel_size,
-            grid_type=grid_type,
             device=device,
         )
     else:

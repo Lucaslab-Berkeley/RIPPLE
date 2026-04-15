@@ -3,6 +3,7 @@
 from typing import TYPE_CHECKING, Optional
 
 import torch
+from torch_motion_correction import DeformationField
 
 from ripple.core import generate_dose_weighted_image, sum_movie
 from ripple.utils.data_io import (
@@ -30,8 +31,8 @@ def load_missing_tensors(
     movie: torch.Tensor | None = None,
     gain_map: torch.Tensor | None = None,
     dark_map: torch.Tensor | None = None,
-    deformation_field: torch.Tensor | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    initial_deformation_field: DeformationField | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, DeformationField | None]:
     """Load only the tensors that are not provided as arguments.
 
     Parameters
@@ -48,20 +49,21 @@ def load_missing_tensors(
         Gain map tensor. If None, will be loaded from config.
     dark_map: Optional[torch.Tensor]
         Dark map tensor. If None, will be loaded from config.
-    deformation_field: Optional[torch.Tensor]
-        Deformation field tensor. If None, will be loaded from config.
+    initial_deformation_field: DeformationField | None
+        Starting deformation field. If None, falls back to
+        ``alignment_config.initial_deformation_field`` (loaded from disk, or
+        None when no path is configured — the backend will zero-initialise).
 
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
-        Tuple of (movie, gain_map, dark_map, deformation_field), with missing
-        ones loaded from config.
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor, DeformationField | None]
+        Tuple of (movie, gain_map, dark_map, initial_deformation_field), with
+        missing ones loaded from config.
     """
     device = computational_config.gpu_id
 
     if movie is None:
         movie = movie_config.movie
-        # if still not none, move to device
         if movie is not None:
             movie = movie.to(device)
     else:
@@ -81,14 +83,14 @@ def load_missing_tensors(
     else:
         dark_map = dark_map.to(device)
 
-    if deformation_field is None:
-        deformation_field = alignment_config.deformation_field
-        if deformation_field is not None:
-            deformation_field = deformation_field.to(device)
+    if initial_deformation_field is None:
+        initial_deformation_field = alignment_config.initial_deformation_field
+        if initial_deformation_field is not None:
+            initial_deformation_field = initial_deformation_field.to(device)
     else:
-        deformation_field = deformation_field.to(device)
+        initial_deformation_field = initial_deformation_field.to(device)
 
-    return movie, gain_map, dark_map, deformation_field
+    return movie, gain_map, dark_map, initial_deformation_field
 
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -96,7 +98,7 @@ def save_results(
     output_config: "OutputConfig",
     movie_config: "MovieConfig",
     corrected_movie: torch.Tensor,
-    updated_deformation_field: torch.Tensor,
+    updated_deformation_field: DeformationField,
     movie_prepared: torch.Tensor,
     trajectory: Optional["OptimizationTracker"] = None,
 ) -> None:
@@ -141,9 +143,8 @@ def save_results(
 
     # Save deformation field if wanted
     if output_config.deformation_field_output_path is not None:
-        updated_deformation_field = updated_deformation_field.cpu()
         save_deformation_field(
-            updated_deformation_field,
+            updated_deformation_field.data.cpu(),
             output_config.deformation_field_output_path,
         )
 
