@@ -213,6 +213,62 @@ def load_mrc_movie(file_path: str | os.PathLike | Path) -> torch.Tensor:
     return tensor
 
 
+def load_image_from_path(file_path: str | os.PathLike | Path) -> torch.Tensor:
+    """Load a 2-D image (gain map or dark map) from an MRC or TIFF-family file.
+
+    Parameters
+    ----------
+    file_path : str | os.PathLike | Path
+        Path to the image file. Supported extensions: ``.mrc``,
+        ``.tif``, ``.tiff``, ``.gain``, ``.dark``.
+
+    Returns
+    -------
+    torch.Tensor
+        The image as a 2-D float32 tensor.
+
+    Raises
+    ------
+    ValueError
+        If the file extension is not supported.
+    """
+    path_str = str(file_path)
+    if path_str.endswith(".mrc"):
+        return load_mrc_image(path_str)
+    if any(path_str.endswith(ext) for ext in (".tif", ".tiff", ".gain", ".dark")):
+        return read_tif_to_tensor(path_str)
+    raise ValueError(f"Unsupported image file extension: {file_path}")
+
+
+def load_movie_from_path(file_path: str | os.PathLike | Path) -> torch.Tensor:
+    """Load a 3-D movie from an MRC or TIFF file.
+
+    For EER files use :func:`render_eer_to_tensor` directly (it requires
+    additional fluence arguments that are not available here).
+
+    Parameters
+    ----------
+    file_path : str | os.PathLike | Path
+        Path to the movie file. Supported extensions: ``.mrc``, ``.tif``.
+
+    Returns
+    -------
+    torch.Tensor
+        The movie as a 3-D float32 tensor.
+
+    Raises
+    ------
+    ValueError
+        If the file extension is not supported.
+    """
+    path_str = str(file_path)
+    if path_str.endswith(".mrc"):
+        return load_mrc_movie(path_str)
+    if path_str.endswith(".tif"):
+        return read_tif_to_tensor(path_str)
+    raise ValueError(f"Unsupported movie file extension: {file_path}")
+
+
 def load_deformation_field(
     file_path: str | os.PathLike | Path,
 ) -> torch.Tensor:

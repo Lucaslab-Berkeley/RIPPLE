@@ -5,9 +5,8 @@ from pydantic import field_validator
 
 from ripple.utils.custom_types import BaseModelRIPPLE
 from ripple.utils.data_io import (
-    load_mrc_image,
-    load_mrc_movie,
-    read_tif_to_tensor,
+    load_image_from_path,
+    load_movie_from_path,
     render_eer_to_tensor,
 )
 
@@ -83,42 +82,22 @@ class MovieConfig(BaseModelRIPPLE):
         """Get the movie tensor."""
         if not self.movie_path:
             raise ValueError("Movie path is not set.")
-        if self.movie_path.endswith(".mrc"):
-            return load_mrc_movie(self.movie_path)
-        if self.movie_path.endswith(".tif"):
-            return read_tif_to_tensor(self.movie_path)
         if self.movie_path.endswith(".eer"):
             return render_eer_to_tensor(
                 self.movie_path, self.fluence_per_frame, self.fluence
             )
-        raise ValueError(f"Unsupported movie file extension: {self.movie_path}")
+        return load_movie_from_path(self.movie_path)
 
     @property
     def gain(self) -> torch.Tensor:
         """Get the gain tensor."""
         if self.gain_path is None:
             return None
-        if self.gain_path.endswith(".mrc"):
-            return load_mrc_image(self.gain_path)
-        if (
-            self.gain_path.endswith(".tif")
-            or self.gain_path.endswith(".tiff")
-            or self.gain_path.endswith(".gain")
-        ):
-            return read_tif_to_tensor(self.gain_path)
-        raise ValueError(f"Unsupported gain file extension: {self.gain_path}")
+        return load_image_from_path(self.gain_path)
 
     @property
     def dark(self) -> torch.Tensor:
         """Get the dark tensor."""
         if self.dark_path is None:
             return None
-        if self.dark_path.endswith(".mrc"):
-            return load_mrc_image(self.dark_path)
-        if (
-            self.dark_path.endswith(".tif")
-            or self.dark_path.endswith(".tiff")
-            or self.dark_path.endswith(".dark")
-        ):
-            return read_tif_to_tensor(self.dark_path)
-        raise ValueError(f"Unsupported dark file extension: {self.dark_path}")
+        return load_image_from_path(self.dark_path)
