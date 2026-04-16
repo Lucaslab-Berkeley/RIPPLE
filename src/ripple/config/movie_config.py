@@ -3,6 +3,7 @@
 import torch
 from pydantic import field_validator
 
+from ripple.core.prepare_movie import prepare_movie
 from ripple.utils.custom_types import BaseModelRIPPLE
 from ripple.utils.data_io import (
     load_image_from_path,
@@ -76,6 +77,32 @@ class MovieConfig(BaseModelRIPPLE):
         if v not in (0, 1, 2, 3):
             raise ValueError(f"gain_rot must be 0, 1, 2, or 3, got {v}")
         return v
+
+    def prepare(
+        self,
+        movie: torch.Tensor,
+        gain_map: torch.Tensor | None = None,
+        dark_map: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Apply gain, dark, hot-pixel, and mean-zero corrections to a movie.
+
+        Parameters
+        ----------
+        movie : torch.Tensor
+            Raw movie tensor (frames x height x width).
+        gain_map : torch.Tensor | None
+            Gain map tensor. If None, gain correction is skipped.
+        dark_map : torch.Tensor | None
+            Dark map tensor. If None, dark correction is skipped.
+
+        Returns
+        -------
+        torch.Tensor
+            Corrected movie tensor.
+        """
+        return prepare_movie(
+            movie, gain_map, dark_map, self.gain_flip, self.gain_rot, self.multiply_gain
+        )
 
     @property
     def movie(self) -> torch.Tensor:

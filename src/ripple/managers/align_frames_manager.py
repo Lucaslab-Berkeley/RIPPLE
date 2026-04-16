@@ -32,8 +32,6 @@ class AlignFramesManager(BaseModelRIPPLE):
     def setup_backend_kwargs(
         self,
         movie: torch.Tensor,
-        gain_map: torch.Tensor,
-        dark_map: torch.Tensor,
         initial_deformation_field: DeformationField | None = None,
     ) -> dict[str, Any]:
         """Build the kwargs dict for :func:`~ripple.core.core_align_frames`.
@@ -41,11 +39,7 @@ class AlignFramesManager(BaseModelRIPPLE):
         Parameters
         ----------
         movie: torch.Tensor
-            Prepared movie tensor.
-        gain_map: torch.Tensor
-            Gain map tensor.
-        dark_map: torch.Tensor
-            Dark map tensor.
+            Prepared (gain/dark corrected, mean-zero'd) movie tensor.
         initial_deformation_field: DeformationField | None
             External override for the starting deformation field (e.g. the
             result of a previous alignment pass). When None the manager falls
@@ -61,21 +55,15 @@ class AlignFramesManager(BaseModelRIPPLE):
         return {
             "movie": movie,
             "initial_deformation_field": deformation_field,
-            "gain_map": gain_map,
-            "dark_map": dark_map,
-            "gain_flip": self.movie_config.gain_flip,
-            "gain_rot": self.movie_config.gain_rot,
-            "multiply_gain": self.movie_config.multiply_gain,
             "pixel_size": self.movie_config.pixel_size,
             "deformation_field_resolution": (
                 self.alignment_config.deformation_field_resolution
             ),
             "loss_trajectories": loss_trajectories,
-            "skip_movie_preparation": self.alignment_config.skip_movie_preparation,
             "patch_sampling": self.alignment_config.as_patch_sampling_config,
             "fourier_filter": self.alignment_config.as_fourier_filter_config,
             "optimization": self.alignment_config.as_optimization_config,
-            "device": self.computational_config.gpu_id,
+            "device": self.computational_config.gpu_device,
         }
 
     def align_frames_last_pass(
@@ -109,9 +97,9 @@ class AlignFramesManager(BaseModelRIPPLE):
                 initial_deformation_field,
             )
         )
-        core_kwargs = self.setup_backend_kwargs(
-            movie, gain_map, dark_map, initial_deformation_field
-        )
+        if not self.alignment_config.skip_movie_preparation:
+            movie = self.movie_config.prepare(movie, gain_map, dark_map)
+        core_kwargs = self.setup_backend_kwargs(movie, initial_deformation_field)
         trajectory: OptimizationTracker | None = None
         corrected_movie, updated_deformation_field, movie_prepared, trajectory = (
             core_align_frames(**core_kwargs, do_correct_motion=True)
@@ -166,9 +154,9 @@ class AlignFramesManager(BaseModelRIPPLE):
                 initial_deformation_field,
             )
         )
-        core_kwargs = self.setup_backend_kwargs(
-            movie, gain_map, dark_map, initial_deformation_field
-        )
+        if not self.alignment_config.skip_movie_preparation:
+            movie = self.movie_config.prepare(movie, gain_map, dark_map)
+        core_kwargs = self.setup_backend_kwargs(movie, initial_deformation_field)
         trajectory: OptimizationTracker | None = None
         do_correct_motion = save_intermediate
         (

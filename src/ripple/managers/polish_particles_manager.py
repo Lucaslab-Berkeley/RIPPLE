@@ -36,11 +36,9 @@ class PolishParticlesManager(BaseModelRIPPLE):
     def setup_backend_kwargs(
         self,
         movie: torch.Tensor,
-        gain_map: torch.Tensor,
-        dark_map: torch.Tensor,
         deformation_field: torch.Tensor,
     ) -> dict[str, Any]:
-        """Setup the backend kwargs for the align frames manager."""
+        """Setup the backend kwargs for core_polish_particles."""
         loss_trajectories = self.output_config.loss_trajectories_output_path is not None
         if loss_trajectories:
             trajectory_kwargs = {
@@ -50,8 +48,6 @@ class PolishParticlesManager(BaseModelRIPPLE):
         else:
             trajectory_kwargs = None
         optimizer_kwargs = {"lr": self.alignment_config.learning_rate}
-        if optimizer_kwargs is None:
-            optimizer_kwargs = {"lr": 0.2}
         # Load YAML config to get the actual CSV path
         refine_config_yaml_path = self.alignment_config.particle_df_path
         with open(refine_config_yaml_path, encoding="utf-8") as f:
@@ -66,25 +62,19 @@ class PolishParticlesManager(BaseModelRIPPLE):
             "var_image": var_image,
             "mean_image": mean_image,
             "particle_indices": particle_indices,
-            "gain_map": gain_map,
-            "dark_map": dark_map,
-            "gain_flip": self.movie_config.gain_flip,
-            "gain_rot": self.movie_config.gain_rot,
             "pixel_size": self.movie_config.pixel_size,
             "deformation_field_resolution": (
                 self.alignment_config.deformation_field_resolution
             ),
             "pre_exposure": self.movie_config.pre_exposure,
             "fluence_per_frame": self.movie_config.fluence_per_frame,
-            "multiply_gain": self.movie_config.multiply_gain,
             "loss_trajectories": loss_trajectories,
-            "skip_movie_preparation": self.alignment_config.skip_movie_preparation,
             "n_iterations": self.alignment_config.n_iterations,
             "optimizer_kwargs": optimizer_kwargs,
             "trajectory_kwargs": trajectory_kwargs,
             "grid_type": self.alignment_config.grid_type,
             "voltage": voltage,
-            "device": self.computational_config.gpu_id,
+            "device": self.computational_config.gpu_device,
             "loss_metric": self.alignment_config.loss_metric,
             "min_snr": self.alignment_config.min_snr,
             "best_n": self.alignment_config.best_n,
@@ -154,9 +144,9 @@ class PolishParticlesManager(BaseModelRIPPLE):
             deformation_field,
         )
 
-        core_kwargs = self.setup_backend_kwargs(
-            movie, gain_map, dark_map, deformation_field
-        )
+        if not self.alignment_config.skip_movie_preparation:
+            movie = self.movie_config.prepare(movie, gain_map, dark_map)
+        core_kwargs = self.setup_backend_kwargs(movie, deformation_field)
         trajectory: OptimizationTracker | None = None
 
         # Check if we should run sigma optimization

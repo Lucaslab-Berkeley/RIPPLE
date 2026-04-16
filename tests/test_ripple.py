@@ -10,6 +10,7 @@ from torch_motion_correction import OptimizationConfig as MotionOptimizationConf
 
 import ripple
 from ripple.core.core_align_frames import core_align_frames
+from ripple.core.prepare_movie import prepare_movie
 
 
 def test_imports_with_version():
@@ -52,17 +53,10 @@ def test_core_align_frames_basic(
         core_align_frames(
             movie=sample_movie,
             initial_deformation_field=sample_deformation_field,
-            gain_map=None,
-            dark_map=None,
-            gain_flip=0,
-            gain_rot=0,
             pixel_size=1.0,
             deformation_field_resolution=(1, 8, 8),
             patch_sampling=patch_sampling,
             optimization=fast_optimization,
-            multiply_gain=True,
-            loss_trajectories=False,
-            skip_movie_preparation=False,
             do_correct_motion=True,
         )
     )
@@ -77,29 +71,6 @@ def test_core_align_frames_basic(
     assert updated_deformation_field.shape == sample_deformation_field.shape
 
 
-def test_core_align_frames_with_skip_preparation(
-    sample_movie, sample_deformation_field, patch_sampling, fast_optimization
-):
-    """Test core_align_frames with skip_movie_preparation=True."""
-    corrected_movie, _, movie_prepared, _ = core_align_frames(
-        movie=sample_movie,
-        initial_deformation_field=sample_deformation_field,
-        gain_map=None,
-        dark_map=None,
-        gain_flip=0,
-        gain_rot=0,
-        pixel_size=1.0,
-        deformation_field_resolution=(1, 8, 8),
-        patch_sampling=patch_sampling,
-        optimization=fast_optimization,
-        skip_movie_preparation=True,
-        do_correct_motion=True,
-    )
-
-    assert torch.allclose(movie_prepared, sample_movie)
-    assert corrected_movie.shape == sample_movie.shape
-
-
 def test_core_align_frames_without_motion_correction(
     sample_movie, sample_deformation_field, patch_sampling, fast_optimization
 ):
@@ -107,10 +78,6 @@ def test_core_align_frames_without_motion_correction(
     corrected_movie, updated_deformation_field, movie_prepared, _ = core_align_frames(
         movie=sample_movie,
         initial_deformation_field=sample_deformation_field,
-        gain_map=None,
-        dark_map=None,
-        gain_flip=0,
-        gain_rot=0,
         pixel_size=1.0,
         deformation_field_resolution=(1, 8, 8),
         patch_sampling=patch_sampling,
@@ -131,17 +98,10 @@ def test_core_align_frames_single_frame(
     corrected_movie, updated_deformation_field, movie_prepared, _ = core_align_frames(
         movie=single_frame_movie,
         initial_deformation_field=sample_deformation_field,
-        gain_map=None,
-        dark_map=None,
-        gain_flip=0,
-        gain_rot=0,
         pixel_size=1.0,
         deformation_field_resolution=(1, 8, 8),
         patch_sampling=patch_sampling,
         optimization=fast_optimization,
-        multiply_gain=True,
-        loss_trajectories=False,
-        skip_movie_preparation=False,
         do_correct_motion=True,
     )
 
@@ -153,23 +113,17 @@ def test_core_align_frames_single_frame(
 def test_core_align_frames_with_gain_map(
     sample_movie, sample_deformation_field, patch_sampling, fast_optimization
 ):
-    """Test core_align_frames with a gain map."""
+    """Test core_align_frames after gain map preparation."""
     gain_map = torch.ones(64, 64, dtype=torch.float32) * 2.0
+    prepared = prepare_movie(sample_movie, gain_map, None, gain_flip=0, gain_rot=0)
 
     corrected_movie, _, movie_prepared, _ = core_align_frames(
-        movie=sample_movie,
+        movie=prepared,
         initial_deformation_field=sample_deformation_field,
-        gain_map=gain_map,
-        dark_map=None,
-        gain_flip=0,
-        gain_rot=0,
         pixel_size=1.0,
         deformation_field_resolution=(1, 8, 8),
         patch_sampling=patch_sampling,
         optimization=fast_optimization,
-        multiply_gain=True,
-        loss_trajectories=False,
-        skip_movie_preparation=False,
         do_correct_motion=True,
     )
 
@@ -180,23 +134,17 @@ def test_core_align_frames_with_gain_map(
 def test_core_align_frames_with_dark_map(
     sample_movie, sample_deformation_field, patch_sampling, fast_optimization
 ):
-    """Test core_align_frames with a dark map."""
+    """Test core_align_frames after dark map preparation."""
     dark_map = torch.ones(64, 64, dtype=torch.float32) * 0.5
+    prepared = prepare_movie(sample_movie, None, dark_map, gain_flip=0, gain_rot=0)
 
     corrected_movie, _, movie_prepared, _ = core_align_frames(
-        movie=sample_movie,
+        movie=prepared,
         initial_deformation_field=sample_deformation_field,
-        gain_map=None,
-        dark_map=dark_map,
-        gain_flip=0,
-        gain_rot=0,
         pixel_size=1.0,
         deformation_field_resolution=(1, 8, 8),
         patch_sampling=patch_sampling,
         optimization=fast_optimization,
-        multiply_gain=True,
-        loss_trajectories=False,
-        skip_movie_preparation=False,
         do_correct_motion=True,
     )
 
@@ -213,17 +161,10 @@ def test_core_align_frames_zero_iterations(
     corrected_movie, updated_deformation_field, movie_prepared, _ = core_align_frames(
         movie=sample_movie,
         initial_deformation_field=sample_deformation_field,
-        gain_map=None,
-        dark_map=None,
-        gain_flip=0,
-        gain_rot=0,
         pixel_size=1.0,
         deformation_field_resolution=(1, 8, 8),
         patch_sampling=patch_sampling,
         optimization=zero_optimization,
-        multiply_gain=True,
-        loss_trajectories=False,
-        skip_movie_preparation=False,
         do_correct_motion=True,
     )
 

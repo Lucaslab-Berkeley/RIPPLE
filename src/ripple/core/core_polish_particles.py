@@ -34,27 +34,20 @@ from .motion_priors import (
     laplacian_compute,
     relion2019_compute,
 )
-from .prepare_movie import prepare_core
 
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
 def core_polish_particles(
-    movie: torch.Tensor,  # (t, H, W)
+    movie: torch.Tensor,  # (t, H, W) — must be gain/dark corrected and mean-zero'd
     initial_deformation_field: torch.Tensor,
     refine_config_path: str,
     var_image: torch.Tensor,
     mean_image: torch.Tensor,
-    gain_map: torch.Tensor | None,
-    dark_map: torch.Tensor | None,
-    gain_flip: int,
-    gain_rot: int,
     pixel_size: float,
     deformation_field_resolution: tuple[int, int, int],  # (nt, nh, nw)
     pre_exposure: float = 0.0,
     fluence_per_frame: float = 1.0,
-    multiply_gain: bool = True,
     loss_trajectories: bool = False,
-    skip_movie_preparation: bool = False,
     n_iterations: int = 100,
     optimizer_kwargs: dict[str, Any] | None = None,
     grid_type: Literal["catmull_rom", "bspline"] = "catmull_rom",
@@ -96,14 +89,6 @@ def core_polish_particles(
         (t, H, W) variance image.
     mean_image: torch.Tensor
         (t, H, W) mean image.
-    gain_map: torch.Tensor | None
-        (H, W) gain map.
-    dark_map: torch.Tensor | None
-        (H, W) dark map.
-    gain_flip: int
-        Gain flip value.
-    gain_rot: int
-        Gain rotation value.
     pixel_size: float
         Pixel size in Angstroms.
     deformation_field_resolution: tuple[int, int, int]
@@ -112,12 +97,8 @@ def core_polish_particles(
         Pre-exposure time in seconds.
     fluence_per_frame: float
         Fluence per frame in electrons per pixel.
-    multiply_gain: bool
-        Whether to multiply the gain map by the movie.
     loss_trajectories: bool
         Whether to return the optimization trajectory.
-    skip_movie_preparation: bool
-        Whether to skip the movie preparation step.
     n_iterations: int
         Number of iterations for the optimization process.
     optimizer_kwargs: dict[str, Any] | None
@@ -183,19 +164,9 @@ def core_polish_particles(
         - Movie prepared (t, H, W)
         - Optimization trajectory (OptimizationTracker)
     """
-    movie_prepared = prepare_core(
-        movie,
-        gain_map,
-        dark_map,
-        gain_flip,
-        gain_rot,
-        multiply_gain,
-        skip_movie_preparation,
-    )
-
     # Prepare common kwargs for estimation functions (shared between both methods)
     estimate_kwargs = {
-        "image": movie_prepared,
+        "image": movie,
         "var_image": var_image,
         "mean_image": mean_image,
         "deformation_field_resolution": deformation_field_resolution,
@@ -269,16 +240,16 @@ def core_polish_particles(
     # correct the motion
     if do_correct_motion:
         corrected_movie = correct_motion(
-            image=movie_prepared,
+            image=movie,
             deformation_grid=updated_deformation_field,
             pixel_spacing=pixel_size,
             grid_type=grid_type,
             device=device,
         )
     else:
-        corrected_movie = movie_prepared
+        corrected_movie = movie
 
-    return corrected_movie, updated_deformation_field, movie_prepared, trajectory
+    return corrected_movie, updated_deformation_field, movie, trajectory
 
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
