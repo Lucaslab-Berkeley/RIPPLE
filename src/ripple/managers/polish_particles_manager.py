@@ -8,6 +8,10 @@ import torch
 import yaml
 from pydantic import ConfigDict
 
+if TYPE_CHECKING:
+    from torch_motion_correction import OptimizationTracker
+
+
 from ripple.config import (
     ComputationalConfig,
     MovieConfig,
@@ -18,9 +22,6 @@ from ripple.core import core_optimize_sigmas, core_polish_particles
 from ripple.managers import manager_utils
 from ripple.utils.custom_types import BaseModelRIPPLE
 from ripple.utils.data_io import read_mrc_to_tensor
-
-if TYPE_CHECKING:
-    from torch_motion_correction import OptimizationTracker
 
 
 class PolishParticlesManager(BaseModelRIPPLE):
@@ -39,14 +40,6 @@ class PolishParticlesManager(BaseModelRIPPLE):
         deformation_field: torch.Tensor,
     ) -> dict[str, Any]:
         """Setup the backend kwargs for core_polish_particles."""
-        loss_trajectories = self.output_config.loss_trajectories_output_path is not None
-        if loss_trajectories:
-            trajectory_kwargs = {
-                "sample_every_n_steps": 1,
-                "total_steps": self.alignment_config.n_iterations,
-            }
-        else:
-            trajectory_kwargs = None
         optimizer_kwargs = {"lr": self.alignment_config.learning_rate}
         # Load YAML config to get the actual CSV path
         refine_config_yaml_path = self.alignment_config.particle_df_path
@@ -68,10 +61,8 @@ class PolishParticlesManager(BaseModelRIPPLE):
             ),
             "pre_exposure": self.movie_config.pre_exposure,
             "fluence_per_frame": self.movie_config.fluence_per_frame,
-            "loss_trajectories": loss_trajectories,
             "n_iterations": self.alignment_config.n_iterations,
             "optimizer_kwargs": optimizer_kwargs,
-            "trajectory_kwargs": trajectory_kwargs,
             "grid_type": self.alignment_config.grid_type,
             "voltage": voltage,
             "device": self.computational_config.gpu_device,
@@ -147,7 +138,7 @@ class PolishParticlesManager(BaseModelRIPPLE):
         if not self.alignment_config.skip_movie_preparation:
             movie = self.movie_config.prepare(movie, gain_map, dark_map)
         core_kwargs = self.setup_backend_kwargs(movie, deformation_field)
-        trajectory: OptimizationTracker | None = None
+        trajectory: OptimizationTracker
 
         # Check if we should run sigma optimization
         if self.alignment_config.optimize_sigmas:

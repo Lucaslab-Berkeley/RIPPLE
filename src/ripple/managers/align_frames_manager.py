@@ -1,10 +1,10 @@
 """Manager for aligning frames of a cryo-EM movie."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, Optional
+from typing import Any, ClassVar
 
 import torch
 from pydantic import ConfigDict
-from torch_motion_correction import DeformationField
+from torch_motion_correction import DeformationField, OptimizationTracker
 
 from ripple.config import (
     AlignFramesConfig,
@@ -15,9 +15,6 @@ from ripple.config import (
 from ripple.core import core_align_frames
 from ripple.managers import manager_utils
 from ripple.utils.custom_types import BaseModelRIPPLE
-
-if TYPE_CHECKING:
-    from torch_motion_correction import OptimizationTracker
 
 
 class AlignFramesManager(BaseModelRIPPLE):
@@ -51,7 +48,6 @@ class AlignFramesManager(BaseModelRIPPLE):
             if initial_deformation_field is not None
             else self.alignment_config.initial_deformation_field
         )
-        loss_trajectories = self.output_config.loss_trajectories_output_path is not None
         return {
             "movie": movie,
             "initial_deformation_field": deformation_field,
@@ -59,7 +55,6 @@ class AlignFramesManager(BaseModelRIPPLE):
             "deformation_field_resolution": (
                 self.alignment_config.deformation_field_resolution
             ),
-            "loss_trajectories": loss_trajectories,
             "patch_sampling": self.alignment_config.as_patch_sampling_config,
             "fourier_filter": self.alignment_config.as_fourier_filter_config,
             "optimization": self.alignment_config.as_optimization_config,
@@ -100,7 +95,6 @@ class AlignFramesManager(BaseModelRIPPLE):
         if not self.alignment_config.skip_movie_preparation:
             movie = self.movie_config.prepare(movie, gain_map, dark_map)
         core_kwargs = self.setup_backend_kwargs(movie, initial_deformation_field)
-        trajectory: OptimizationTracker | None = None
         corrected_movie, updated_deformation_field, movie_prepared, trajectory = (
             core_align_frames(**core_kwargs, do_correct_motion=True)
         )
@@ -122,7 +116,7 @@ class AlignFramesManager(BaseModelRIPPLE):
         gain_map: torch.Tensor | None = None,
         dark_map: torch.Tensor | None = None,
         initial_deformation_field: DeformationField | None = None,
-    ) -> tuple[DeformationField, torch.Tensor, Optional["OptimizationTracker"]]:
+    ) -> tuple[DeformationField, torch.Tensor, "OptimizationTracker"]:
         """Run an alignment pass without final output saving (for multi-pass workflows).
 
         Parameters
@@ -157,7 +151,6 @@ class AlignFramesManager(BaseModelRIPPLE):
         if not self.alignment_config.skip_movie_preparation:
             movie = self.movie_config.prepare(movie, gain_map, dark_map)
         core_kwargs = self.setup_backend_kwargs(movie, initial_deformation_field)
-        trajectory: OptimizationTracker | None = None
         do_correct_motion = save_intermediate
         (
             corrected_movie,

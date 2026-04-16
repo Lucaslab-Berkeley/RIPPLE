@@ -47,11 +47,9 @@ def core_polish_particles(
     deformation_field_resolution: tuple[int, int, int],  # (nt, nh, nw)
     pre_exposure: float = 0.0,
     fluence_per_frame: float = 1.0,
-    loss_trajectories: bool = False,
     n_iterations: int = 100,
     optimizer_kwargs: dict[str, Any] | None = None,
     grid_type: Literal["catmull_rom", "bspline"] = "catmull_rom",
-    trajectory_kwargs: dict | None = None,
     correlation_batch_size: int = 20,
     do_correct_motion: bool = True,
     voltage: float = 300.0,
@@ -73,7 +71,7 @@ def core_polish_particles(
     sigma_a_amplitude: float = 2.0,
     sigma_a_decay: float = 0.1,
     sigma_a_offset: float = 1.0,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, OptimizationTracker | None]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, OptimizationTracker]:
     """
     Core function for polishing particles.
 
@@ -97,16 +95,12 @@ def core_polish_particles(
         Pre-exposure time in seconds.
     fluence_per_frame: float
         Fluence per frame in electrons per pixel.
-    loss_trajectories: bool
-        Whether to return the optimization trajectory.
     n_iterations: int
         Number of iterations for the optimization process.
     optimizer_kwargs: dict[str, Any] | None
         Keyword arguments for the optimizer.
     grid_type: Literal["catmull_rom", "bspline"]
         Grid type to use for the deformation field.
-    trajectory_kwargs: dict | None
-        Keyword arguments for the trajectory tracking.
     correlation_batch_size: int
         Batch size for the correlation.
     do_correct_motion: bool
@@ -176,8 +170,6 @@ def core_polish_particles(
         "fluence_per_frame": fluence_per_frame,
         "n_iterations": n_iterations,
         "optimizer_kwargs": optimizer_kwargs,
-        "return_trajectory": loss_trajectories,
-        "trajectory_kwargs": trajectory_kwargs,
         "correlation_batch_size": correlation_batch_size,
         "particle_indices": particle_indices,
         "device": device,
@@ -201,42 +193,23 @@ def core_polish_particles(
     }
 
     # estimate the motion
-    if loss_trajectories:
-        if movie_extract:
-            (
-                updated_deformation_field,
-                trajectory,
-            ) = estimate_local_motion_2dtm_particles_bayesian(
+    if movie_extract:
+        updated_deformation_field, trajectory = (
+            estimate_local_motion_2dtm_particles_bayesian(
                 **estimate_kwargs,
                 **prior_kwargs,
                 particle_batch_size=particle_batch_size,
                 pixel_spacing=pixel_size,
             )
-        else:
-            updated_deformation_field, trajectory = estimate_local_motion_2dtm_bayesian(
-                **estimate_kwargs,
-                **prior_kwargs,
-                pixel_spacing=pixel_size,
-                grid_type=grid_type,
-                voltage=voltage,
-            )
+        )
     else:
-        if movie_extract:
-            updated_deformation_field = estimate_local_motion_2dtm_particles_bayesian(
-                **estimate_kwargs,
-                **prior_kwargs,
-                particle_batch_size=particle_batch_size,
-                pixel_spacing=pixel_size,
-            )
-        else:
-            updated_deformation_field = estimate_local_motion_2dtm_bayesian(
-                **estimate_kwargs,
-                **prior_kwargs,
-                pixel_spacing=pixel_size,
-                grid_type=grid_type,
-                voltage=voltage,
-            )
-        trajectory = None
+        updated_deformation_field, trajectory = estimate_local_motion_2dtm_bayesian(
+            **estimate_kwargs,
+            **prior_kwargs,
+            pixel_spacing=pixel_size,
+            grid_type=grid_type,
+            voltage=voltage,
+        )
     # correct the motion
     if do_correct_motion:
         corrected_movie = correct_motion(
@@ -266,8 +239,6 @@ def estimate_local_motion_2dtm_bayesian(
     n_iterations: int = 100,
     optimizer_kwargs: dict[str, Any] | None = None,
     grid_type: Literal["catmull_rom", "bspline"] = "catmull_rom",
-    return_trajectory: bool = False,
-    trajectory_kwargs: dict | None = None,
     correlation_batch_size: int = 20,
     voltage: float = 300.0,
     particle_indices: pd.Index = None,
@@ -286,7 +257,7 @@ def estimate_local_motion_2dtm_bayesian(
     sigma_a_amplitude: float = 2.0,
     sigma_a_decay: float = 0.1,
     sigma_a_offset: float = 1.0,
-) -> torch.Tensor | tuple[torch.Tensor, OptimizationTracker]:
+) -> tuple[torch.Tensor, OptimizationTracker]:
     """Estimate motion (new method).
 
     Parameters
@@ -333,12 +304,6 @@ def estimate_local_motion_2dtm_bayesian(
         Keyword arguments for the optimizer. If None, uses defaults.
     grid_type: Literal["catmull_rom", "bspline"] = "catmull_rom",
         Grid type to use for the deformation field. Default is "catmull_rom".
-    return_trajectory: bool = False,
-        Whether to return the optimization trajectory. Default is False. If true, a
-        second return value will be provided which is an OptimizationTrajectory object.
-    trajectory_kwargs: dict | None = None,
-        Additional keyword arguments for the trajectory tracking. If None, uses
-        defaults.
     save_intermediate_fields: bool = False,
         Whether to save the intermediate fields.
     intermediate_fields_dir: str
@@ -372,10 +337,10 @@ def estimate_local_motion_2dtm_bayesian(
 
     Returns
     -------
-    torch.Tensor | tuple[torch.Tensor, OptimizationTracker]
+    tuple[torch.Tensor, OptimizationTracker]
         The estimated deformation field with shape (2, nt, nh, nw) where 2 corresponds
-        to (y, x) shifts. If `return_trajectory` is True, also returns an
-        OptimizationTrajectory object containing the optimization history.
+        to (y, x) shifts, and an OptimizationTracker containing the optimization
+        history.
     """
     torch.set_grad_enabled(True)
 
@@ -391,8 +356,6 @@ def estimate_local_motion_2dtm_bayesian(
         mean_image=mean_image,
         image=image,
         optimizer_kwargs=optimizer_kwargs,
-        return_trajectory=return_trajectory,
-        trajectory_kwargs=trajectory_kwargs,
         initial_deformation_field=initial_deformation_field,
         deformation_field_resolution=deformation_field_resolution,
         device=device,
@@ -557,9 +520,7 @@ def estimate_local_motion_2dtm_bayesian(
     average_shift = torch.mean(final_deformation_field, dim=(1, 2, 3), keepdim=True)
     final_deformation_field = final_deformation_field - average_shift
 
-    if return_trajectory:
-        return final_deformation_field, trajectory
-    return final_deformation_field
+    return final_deformation_field, trajectory
 
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
@@ -575,8 +536,6 @@ def estimate_local_motion_2dtm_particles_bayesian(
     fluence_per_frame: float = 1.0,
     n_iterations: int = 100,
     optimizer_kwargs: dict[str, Any] | None = None,
-    return_trajectory: bool = False,
-    trajectory_kwargs: dict | None = None,
     correlation_batch_size: int = 20,
     particle_batch_size: int = 102,
     particle_indices: pd.Index = None,
@@ -595,7 +554,7 @@ def estimate_local_motion_2dtm_particles_bayesian(
     sigma_a_amplitude: float = 2.0,
     sigma_a_decay: float = 0.1,
     sigma_a_offset: float = 1.0,
-) -> torch.Tensor | tuple[torch.Tensor, OptimizationTracker]:
+) -> tuple[torch.Tensor, OptimizationTracker]:
     """Estimate motion (new method).
 
     Parameters
@@ -628,12 +587,6 @@ def estimate_local_motion_2dtm_particles_bayesian(
         Number of iterations for the optimization process. Default is 100.
     optimizer_kwargs: dict[str, Any] | None = None,
         Keyword arguments for the optimizer. If None, uses defaults.
-    return_trajectory: bool
-        Whether to return the optimization trajectory. Default is False. If true, a
-        second return value will be provided which is an OptimizationTrajectory object.
-    trajectory_kwargs: dict | None
-        Additional keyword arguments for the trajectory tracking. If None, uses
-        defaults.
     correlation_batch_size: int
         Batch size for the correlation. Default is 20.
     particle_indices: pd.Index = None,
@@ -680,10 +633,10 @@ def estimate_local_motion_2dtm_particles_bayesian(
 
     Returns
     -------
-    torch.Tensor | tuple[torch.Tensor, OptimizationTracker]
+    tuple[torch.Tensor, OptimizationTracker]
         The estimated deformation field with shape (2, nt, nh, nw) where 2 corresponds
-        to (y, x) shifts. If `return_trajectory` is True, also returns an
-        OptimizationTrajectory object containing the optimization history.
+        to (y, x) shifts, and an OptimizationTracker containing the optimization
+        history.
     """
     torch.set_grad_enabled(True)
 
@@ -702,8 +655,6 @@ def estimate_local_motion_2dtm_particles_bayesian(
         mean_image=mean_image,
         image=image,
         optimizer_kwargs=optimizer_kwargs,
-        return_trajectory=return_trajectory,
-        trajectory_kwargs=trajectory_kwargs,
         initial_deformation_field=initial_deformation_field,
         deformation_field_resolution=deformation_field_resolution,
         device=device,
@@ -900,9 +851,7 @@ def estimate_local_motion_2dtm_particles_bayesian(
     average_shift = torch.mean(final_deformation_field, dim=(1, 2, 3), keepdim=True)
     final_deformation_field = final_deformation_field - average_shift
 
-    if return_trajectory:
-        return final_deformation_field, trajectory
-    return final_deformation_field
+    return final_deformation_field, trajectory
 
 
 def _setup_estimate_motion(
@@ -916,8 +865,6 @@ def _setup_estimate_motion(
     mean_image: torch.Tensor,
     image: torch.Tensor,
     optimizer_kwargs: dict[str, Any] | None,
-    return_trajectory: bool,
-    trajectory_kwargs: dict | None,
     initial_deformation_field: torch.Tensor | None,
     deformation_field_resolution: tuple[int, int, int],
     device: torch.device | None,
@@ -948,10 +895,6 @@ def _setup_estimate_motion(
         (t, H, W) image tensor.
     optimizer_kwargs: dict[str, Any] | None
         Keyword arguments for the optimizer.
-    return_trajectory: bool
-        Whether to return the optimization trajectory.
-    trajectory_kwargs: dict | None
-        Additional keyword arguments for the trajectory tracking.
     initial_deformation_field: torch.Tensor | None
         Initial deformation field to start from.
     deformation_field_resolution: tuple[int, int, int]
@@ -996,10 +939,7 @@ def _setup_estimate_motion(
         mean_image = mean_image.clone().detach().requires_grad_(False)
     if optimizer_kwargs is None:
         optimizer_kwargs = {"lr": 0.2}
-    trajectory = None
-    if return_trajectory:
-        trajectory_kwargs = trajectory_kwargs if trajectory_kwargs is not None else {}
-        trajectory = OptimizationTracker(**trajectory_kwargs)
+    trajectory = OptimizationTracker(sample_every_n_steps=1, total_steps=0)
 
     # Ensure image does NOT require gradients - only deformation field should
     if image.requires_grad:

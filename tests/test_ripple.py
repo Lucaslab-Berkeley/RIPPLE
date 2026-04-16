@@ -7,6 +7,7 @@ import pytest
 import torch
 from torch_motion_correction import DeformationField, PatchSamplingConfig
 from torch_motion_correction import OptimizationConfig as MotionOptimizationConfig
+from torch_motion_correction.optimization_state import OptimizationTracker
 
 import ripple
 from ripple.core.core_align_frames import core_align_frames
@@ -64,7 +65,7 @@ def test_core_align_frames_basic(
     assert isinstance(corrected_movie, torch.Tensor)
     assert isinstance(updated_deformation_field, DeformationField)
     assert isinstance(movie_prepared, torch.Tensor)
-    assert trajectory is None
+    assert isinstance(trajectory, OptimizationTracker)
 
     assert corrected_movie.shape == sample_movie.shape
     assert movie_prepared.shape == sample_movie.shape

@@ -1,6 +1,6 @@
 """Utility functions for managers."""
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import torch
 from torch_motion_correction import DeformationField
@@ -13,7 +13,7 @@ from ripple.utils.data_io import (
 )
 
 if TYPE_CHECKING:
-    from torch_motion_correction import OptimizationTracker
+    from torch_motion_correction.optimization_state import OptimizationTracker
 
     from ripple.config import (
         BaseAlignmentConfig,
@@ -60,7 +60,7 @@ def load_missing_tensors(
         Tuple of (movie, gain_map, dark_map, initial_deformation_field), with
         missing ones loaded from config.
     """
-    device = computational_config.gpu_id
+    device = computational_config.gpu_device
 
     if movie is None:
         movie = movie_config.movie
@@ -100,7 +100,7 @@ def save_results(
     corrected_movie: torch.Tensor,
     updated_deformation_field: DeformationField,
     movie_prepared: torch.Tensor,
-    trajectory: Optional["OptimizationTracker"] = None,
+    trajectory: "OptimizationTracker",
 ) -> None:
     """
     Save the results of the alignment.
@@ -177,9 +177,8 @@ def save_results(
         )
 
     # Save loss trajectories if wanted
-    if trajectory is not None:
-        if output_config.loss_trajectories_output_path is not None:
-            write_trajectory_to_csv(
-                trajectory=trajectory,
-                file_path=output_config.loss_trajectories_output_path,
-            )
+    if output_config.loss_trajectories_output_path is not None:
+        write_trajectory_to_csv(
+            trajectory=trajectory,
+            file_path=output_config.loss_trajectories_output_path,
+        )

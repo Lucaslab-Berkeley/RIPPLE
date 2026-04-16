@@ -1,7 +1,5 @@
 """Core function for aligning frames of a cryo-EM movie."""
 
-from typing import TYPE_CHECKING, Optional
-
 import torch
 from torch_motion_correction import (
     DeformationField,
@@ -11,9 +9,7 @@ from torch_motion_correction import (
     estimate_local_motion,
 )
 from torch_motion_correction import OptimizationConfig as MotionOptimizationConfig
-
-if TYPE_CHECKING:
-    from torch_motion_correction import OptimizationTracker
+from torch_motion_correction.optimization_state import OptimizationTracker
 
 
 def core_align_frames(
@@ -24,12 +20,9 @@ def core_align_frames(
     patch_sampling: PatchSamplingConfig,
     fourier_filter: FourierFilterConfig | None = None,
     optimization: MotionOptimizationConfig | None = None,
-    loss_trajectories: bool = False,
     do_correct_motion: bool = True,
     device: torch.device = None,
-) -> tuple[
-    torch.Tensor, DeformationField, torch.Tensor, Optional["OptimizationTracker"]
-]:
+) -> tuple[torch.Tensor, DeformationField, torch.Tensor, OptimizationTracker]:
     """Core function for aligning frames of a cryo-EM movie.
 
     Parameters
@@ -49,8 +42,6 @@ def core_align_frames(
         Fourier-space filtering parameters (b_factor and frequency_range).
     optimization: MotionOptimizationConfig
         Gradient-based optimisation hyper-parameters.
-    loss_trajectories: bool
-        Whether to return the optimisation trajectory.
     do_correct_motion: bool
         Whether to warp the movie with the estimated deformation field.
     device: torch.device
@@ -58,11 +49,11 @@ def core_align_frames(
 
     Returns
     -------
-    tuple[torch.Tensor, DeformationField, torch.Tensor, OptimizationTracker | None]
+    tuple[torch.Tensor, DeformationField, torch.Tensor, OptimizationTracker]
         (corrected_movie, updated_deformation_field, movie_prepared, trajectory)
     """
     torch.set_grad_enabled(True)
-    result = estimate_local_motion(
+    updated_deformation_field, trajectory = estimate_local_motion(
         image=movie,
         pixel_spacing=pixel_size,
         deformation_field_resolution=deformation_field_resolution,
@@ -70,13 +61,7 @@ def core_align_frames(
         initial_deformation_field=initial_deformation_field,
         fourier_filter=fourier_filter,
         optimization=optimization,
-        return_trajectory=loss_trajectories,
     )
-
-    if loss_trajectories:
-        updated_deformation_field, trajectory = result
-    else:
-        updated_deformation_field, trajectory = result, None
 
     if do_correct_motion:
         corrected_movie = correct_motion(

@@ -3,7 +3,7 @@
 import json
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import eerfile
 import mrcfile
@@ -16,9 +16,7 @@ from torch_motion_correction import (
     read_deformation_field_from_csv,
     write_deformation_field_to_csv,
 )
-
-if TYPE_CHECKING:
-    from torch_motion_correction import OptimizationTracker
+from torch_motion_correction.optimization_state import OptimizationTracker
 
 
 def render_eer_to_tensor(
@@ -308,7 +306,7 @@ def save_deformation_field(
 
 
 def write_trajectory_to_csv(
-    trajectory: "OptimizationTracker",
+    trajectory: OptimizationTracker,
     file_path: str | os.PathLike | Path,
 ) -> None:
     """Helper function for saving a trajectory to a CSV file.
