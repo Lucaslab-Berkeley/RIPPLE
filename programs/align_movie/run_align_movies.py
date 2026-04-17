@@ -22,6 +22,16 @@ def get_movie_paths(directory: str) -> list[str]:
     return movie_paths
 
 
+# TODO: Have a cross-correlation first pass to estimate global per-frame motion, then
+#       pass these global shifts into a new deformation field for the optimization stage
+# TODO: Refactor names of functions such that the 'save_intermediate' flag is not used
+#       to export results. Decouple the motion estimation from motion correction and
+#       output file exporting.
+# TODO: Implement stopping criteria based on an optimization history rather than relying
+#       only on a fixed number of iterations.
+#       (may be implementation for torch-motion-correction)
+
+
 def main():
     """Main function to run the align frames manager for a directory of movies."""
     movie_paths = get_movie_paths(MOVIE_DIR)

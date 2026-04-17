@@ -105,3 +105,16 @@ alignment_config:
   # Set to true for subsequent passes after initial alignment
   skip_movie_preparation: false
 
+  # Plateau-style early stopping (default: false)
+  # Stops optimization when the smoothed loss improvement falls below tolerance
+  early_stopping: false
+
+  # Steps without significant improvement before stopping (default: 5)
+  early_stopping_patience: 5
+
+  # Number of recent loss values averaged for smoothing (default: 3)
+  early_stopping_window_size: 3
+
+  # Minimum relative improvement to reset the patience counter (default: 1e-5)
+  early_stopping_tolerance: 1.0e-5
+

@@ -42,6 +42,14 @@ class BaseAlignmentConfig(BaseModelRIPPLE):
         Learning rate for optimization. Default is 0.2.
     skip_movie_preparation: bool
         Whether to skip the movie preparation step. Default is False.
+    early_stopping: bool
+        Whether to enable plateau-style early stopping. Default is False.
+    early_stopping_patience: int
+        Steps without improvement before stopping. Default is 5.
+    early_stopping_window_size: int
+        Number of recent loss values averaged for smoothing. Default is 3.
+    early_stopping_tolerance: float
+        Minimum relative improvement to reset the patience counter. Default is 1e-5.
     """
 
     deformation_field_resolution: tuple[PositiveInt, PositiveInt, PositiveInt]
@@ -51,6 +59,10 @@ class BaseAlignmentConfig(BaseModelRIPPLE):
     optimizer_type: Literal["adam", "lbfgs"] = "adam"
     learning_rate: float = 0.2
     skip_movie_preparation: bool = False
+    early_stopping: bool = False
+    early_stopping_patience: PositiveInt = 5
+    early_stopping_window_size: PositiveInt = 3
+    early_stopping_tolerance: float = 1e-5
 
     @property
     def initial_deformation_field(self) -> DeformationField | None:
@@ -83,10 +95,14 @@ class BaseAlignmentConfig(BaseModelRIPPLE):
             backend.
         """
         return MotionOptimizationConfig(
-            n_iterations=self.n_iterations,
+            max_iterations=self.n_iterations,
             optimizer_type=self.optimizer_type,
             grid_type=self.grid_type,
             optimizer_kwargs={"lr": self.learning_rate},
+            early_stopping=self.early_stopping,
+            early_stopping_patience=self.early_stopping_patience,
+            early_stopping_window_size=self.early_stopping_window_size,
+            early_stopping_tolerance=self.early_stopping_tolerance,
         )
 
 
@@ -171,11 +187,15 @@ class AlignFramesConfig(BaseAlignmentConfig):
         Extends the base implementation to include ``loss_type``.
         """
         return MotionOptimizationConfig(
-            n_iterations=self.n_iterations,
+            max_iterations=self.n_iterations,
             optimizer_type=self.optimizer_type,
             loss_type=self.loss_type,
             grid_type=self.grid_type,
             optimizer_kwargs={"lr": self.learning_rate},
+            early_stopping=self.early_stopping,
+            early_stopping_patience=self.early_stopping_patience,
+            early_stopping_window_size=self.early_stopping_window_size,
+            early_stopping_tolerance=self.early_stopping_tolerance,
         )
 
 
