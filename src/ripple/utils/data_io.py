@@ -12,10 +12,7 @@ import pandas as pd
 import torch
 import yaml
 from tifffile import TiffFile
-from torch_motion_correction import (
-    read_deformation_field_from_csv,
-    write_deformation_field_to_csv,
-)
+from torch_motion_correction import DeformationField
 from torch_motion_correction.optimization_state import OptimizationTracker
 
 
@@ -282,7 +279,7 @@ def load_deformation_field(
     torch.Tensor
         The deformation field as a tensor.
     """
-    return read_deformation_field_from_csv(file_path)
+    return DeformationField.from_csv(file_path).data
 
 
 def save_deformation_field(
@@ -302,7 +299,7 @@ def save_deformation_field(
     -------
     None
     """
-    write_deformation_field_to_csv(deformation_field, file_path)
+    DeformationField(data=deformation_field).to_csv(file_path)
 
 
 def write_trajectory_to_csv(

@@ -124,12 +124,18 @@ class AlignFramesConfig(BaseAlignmentConfig):
     frequency_range: tuple[float, float]
         Frequency range for filtering in Angstroms. First value must be
         larger than the second value. Default is (300, 10).
+    use_xc_prepass: bool
+        Whether to run a fast cross-correlation pre-pass to estimate global
+        per-frame shifts before the gradient-based optimization. The XC
+        shifts seed the initial deformation field so the optimizer starts
+        from a good global motion estimate. Default is True.
     """
 
     patch_shape: tuple[PositiveInt, PositiveInt] = (1024, 1024)
     loss_type: Literal["mse", "cc", "ncc"] = "mse"
     b_factor: float = 500
     frequency_range: tuple[PositiveFloat, PositiveFloat] = (300, 10)
+    use_xc_prepass: bool = True
 
     @field_validator("frequency_range")  # type: ignore[misc]
     @classmethod

@@ -4,7 +4,11 @@ from typing import Any, ClassVar
 
 import torch
 from pydantic import ConfigDict
-from torch_motion_correction import DeformationField, OptimizationTracker
+from torch_motion_correction import (
+    DeformationField,
+    OptimizationTracker,
+    estimate_global_motion,
+)
 
 from ripple.config import (
     AlignFramesConfig,
@@ -12,7 +16,7 @@ from ripple.config import (
     MovieConfig,
     OutputConfig,
 )
-from ripple.core import core_align_frames
+from ripple.core import core_align_frames, core_estimate_motion
 from ripple.managers import manager_utils
 from ripple.utils.custom_types import BaseModelRIPPLE
 
@@ -26,7 +30,7 @@ class AlignFramesManager(BaseModelRIPPLE):
     output_config: OutputConfig
     alignment_config: AlignFramesConfig
 
-    def setup_backend_kwargs(
+    def _setup_estimation_kwargs(
         self,
         movie: torch.Tensor,
         initial_deformation_field: DeformationField | None = None,
@@ -61,114 +65,109 @@ class AlignFramesManager(BaseModelRIPPLE):
             "device": self.computational_config.gpu_device,
         }
 
-    def align_frames_last_pass(
+    def prepare_movie(
         self,
         movie: torch.Tensor | None = None,
         gain_map: torch.Tensor | None = None,
         dark_map: torch.Tensor | None = None,
-        initial_deformation_field: DeformationField | None = None,
-    ) -> None:
-        """Run a final alignment pass and save all requested outputs.
+    ) -> torch.Tensor:
+        """Load and prepare the movie (gain/dark correction, mean-zero).
 
         Parameters
         ----------
         movie: torch.Tensor | None
-            Movie tensor. If None, loaded from config.
+            Raw movie tensor. If None, loaded from ``movie_config``.
         gain_map: torch.Tensor | None
-            Gain map tensor. If None, loaded from config.
+            Gain map tensor. If None, loaded from ``movie_config``.
         dark_map: torch.Tensor | None
-            Dark map tensor. If None, loaded from config.
-        initial_deformation_field: DeformationField | None
-            Starting deformation field. If None, loaded from config.
-        """
-        movie, gain_map, dark_map, initial_deformation_field = (
-            manager_utils.load_missing_tensors(
-                self.computational_config,
-                self.movie_config,
-                self.alignment_config,
-                movie,
-                gain_map,
-                dark_map,
-                initial_deformation_field,
-            )
-        )
-        if not self.alignment_config.skip_movie_preparation:
-            movie = self.movie_config.prepare(movie, gain_map, dark_map)
-        core_kwargs = self.setup_backend_kwargs(movie, initial_deformation_field)
-        corrected_movie, updated_deformation_field, movie_prepared, trajectory = (
-            core_align_frames(**core_kwargs, do_correct_motion=True)
-        )
+            Dark map tensor. If None, loaded from ``movie_config``.
 
+        Returns
+        -------
+        torch.Tensor
+            Prepared movie tensor ready for motion estimation.
+        """
+        movie, gain_map, dark_map, _ = manager_utils.load_missing_tensors(
+            self.computational_config,
+            self.movie_config,
+            self.alignment_config,
+            movie,
+            gain_map,
+            dark_map,
+            initial_deformation_field=None,
+        )
+        return self.movie_config.prepare(movie, gain_map, dark_map)
+
+    def estimate_motion(
+        self,
+        movie: torch.Tensor,
+        initial_deformation_field: DeformationField | None = None,
+    ) -> tuple[DeformationField, OptimizationTracker]:
+        """Estimate motion via optional XC pre-pass then gradient-based optimization.
+
+        If ``alignment_config.use_xc_prepass`` is True and no
+        ``initial_deformation_field`` is provided, a fast whole-image
+        cross-correlation pass runs first to estimate global per-frame shifts.
+        Those shifts seed the deformation field so the gradient optimizer
+        starts from a good global motion estimate.
+
+        Parameters
+        ----------
+        movie: torch.Tensor
+            Prepared movie tensor (output of :meth:`prepare_movie`).
+        initial_deformation_field: DeformationField | None
+            Explicit starting field. When provided, the XC pre-pass is skipped.
+            When None and ``use_xc_prepass`` is True, the XC pre-pass runs
+            automatically.
+
+        Returns
+        -------
+        tuple[DeformationField, OptimizationTracker]
+            Estimated deformation field and optimization history.
+        """
+        device = self.computational_config.gpu_device
+        movie = movie.to(device)
+
+        if self.alignment_config.use_xc_prepass and initial_deformation_field is None:
+            initial_deformation_field = estimate_global_motion(
+                image=movie,
+                pixel_spacing=self.movie_config.pixel_size,
+                fourier_filter=self.alignment_config.as_fourier_filter_config,
+                device=device,
+            )
+
+        kwargs = self._setup_estimation_kwargs(movie, initial_deformation_field)
+        return core_estimate_motion(**kwargs)
+
+    def correct_and_save(
+        self,
+        movie: torch.Tensor,
+        deformation_field: DeformationField,
+        trajectory: OptimizationTracker,
+    ) -> None:
+        """Warp the movie with the estimated deformation field and save outputs.
+
+        Parameters
+        ----------
+        movie: torch.Tensor
+            Prepared movie tensor (output of :meth:`prepare_movie`).
+        deformation_field: DeformationField
+            Estimated deformation field (output of :meth:`estimate_motion`).
+        trajectory: OptimizationTracker
+            Optimization history (output of :meth:`estimate_motion`).
+        """
+        device = self.computational_config.gpu_device
+        corrected_movie = core_align_frames(
+            movie=movie,
+            deformation_field=deformation_field,
+            pixel_size=self.movie_config.pixel_size,
+            device=device,
+        )
         manager_utils.save_results(
             self.output_config,
             self.movie_config,
             corrected_movie,
-            updated_deformation_field,
-            movie_prepared,
+            deformation_field,
+            movie,
             trajectory,
         )
-
-    # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
-    def align_frames_first_passes(
-        self,
-        save_intermediate: bool = False,
-        movie: torch.Tensor | None = None,
-        gain_map: torch.Tensor | None = None,
-        dark_map: torch.Tensor | None = None,
-        initial_deformation_field: DeformationField | None = None,
-    ) -> tuple[DeformationField, torch.Tensor, "OptimizationTracker"]:
-        """Run an alignment pass without final output saving (for multi-pass workflows).
-
-        Parameters
-        ----------
-        save_intermediate: bool
-            Whether to save intermediate results.
-        movie: torch.Tensor | None
-            Movie tensor. If None, loaded from config.
-        gain_map: torch.Tensor | None
-            Gain map tensor. If None, loaded from config.
-        dark_map: torch.Tensor | None
-            Dark map tensor. If None, loaded from config.
-        initial_deformation_field: DeformationField | None
-            Starting deformation field. If None, loaded from config.
-
-        Returns
-        -------
-        tuple[DeformationField, torch.Tensor, OptimizationTracker | None]
-            (updated_deformation_field, movie_prepared, trajectory)
-        """
-        movie, gain_map, dark_map, initial_deformation_field = (
-            manager_utils.load_missing_tensors(
-                self.computational_config,
-                self.movie_config,
-                self.alignment_config,
-                movie,
-                gain_map,
-                dark_map,
-                initial_deformation_field,
-            )
-        )
-        if not self.alignment_config.skip_movie_preparation:
-            movie = self.movie_config.prepare(movie, gain_map, dark_map)
-        core_kwargs = self.setup_backend_kwargs(movie, initial_deformation_field)
-        do_correct_motion = save_intermediate
-        (
-            corrected_movie,
-            updated_deformation_field,
-            movie_prepared,
-            trajectory,
-        ) = core_align_frames(
-            **core_kwargs,
-            do_correct_motion=do_correct_motion,
-        )
-        if save_intermediate:
-            manager_utils.save_results(
-                self.output_config,
-                self.movie_config,
-                corrected_movie,
-                updated_deformation_field,
-                movie_prepared,
-                trajectory,
-            )
-
-        return updated_deformation_field, movie_prepared, trajectory

@@ -12,9 +12,7 @@ import pandas as pd
 import torch
 from scipy.optimize import minimize
 from torch_cubic_spline_grids import CubicCatmullRomGrid3d
-from torch_motion_correction.deformation_field_utils import (
-    resample_deformation_field,
-)
+from torch_motion_correction import DeformationField
 
 from ripple.utils.data_io import (
     load_template_volume_from_config,
@@ -2064,8 +2062,10 @@ def _run_inner_optimization_common(
             size=(2, *deformation_field_resolution), device=device, requires_grad=True
         )
     else:
-        deformation_field_data = resample_deformation_field(
-            initial_deformation_field, deformation_field_resolution
+        deformation_field_data = (
+            DeformationField(data=initial_deformation_field)
+            .resample(deformation_field_resolution)
+            .data
         )
         deformation_field_data = deformation_field_data - torch.mean(
             deformation_field_data, dim=(1, 2, 3), keepdim=True

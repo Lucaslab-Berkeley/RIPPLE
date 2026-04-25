@@ -1,4 +1,8 @@
-"""Core function for polishing particles."""
+"""Core function for polishing particles.
+
+NOTE: Untested with new torch-motion-correction work, and needs some refactoring to
+only use the DeformationField class rather than raw tensor data or cubic splines.
+"""
 
 import shutil
 import tempfile
@@ -10,10 +14,10 @@ import pandas as pd
 import torch
 import tqdm
 from torch_cubic_spline_grids import CubicBSplineGrid3d, CubicCatmullRomGrid3d
-from torch_motion_correction import correct_motion, correct_motion_two_grids
-from torch_motion_correction.data_io import write_deformation_field_to_csv
-from torch_motion_correction.deformation_field_utils import (
-    resample_deformation_field,
+from torch_motion_correction import (
+    DeformationField,
+    correct_motion,
+    correct_motion_two_grids,
 )
 from torch_motion_correction.optimization_state import OptimizationTracker
 
@@ -414,9 +418,11 @@ def estimate_local_motion_2dtm_bayesian(
 
     for iter_idx in pbar:
         if save_intermediate_fields:
-            write_deformation_field_to_csv(
-                new_deformation_field.data,
-                f"{intermediate_fields_dir}/new_deformation_field_{iter_idx}.csv",
+            new_deformation_field_tmp = DeformationField(
+                data=new_deformation_field.data.cpu().detach(), grid_type=grid_type
+            )
+            new_deformation_field_tmp.to_csv(
+                f"{intermediate_fields_dir}/new_deformation_field_{iter_idx}.csv"
             )
         torch.cuda.empty_cache()
 
@@ -953,13 +959,16 @@ def _setup_estimate_motion(
         )
     else:
         # Get the resampled deformation field
-        deformation_field_data = resample_deformation_field(
-            deformation_field=initial_deformation_field,
-            target_resolution=(
-                deformation_field_resolution[0],
-                deformation_field_resolution[1],
-                deformation_field_resolution[2],
-            ),
+        deformation_field_data = (
+            DeformationField(data=initial_deformation_field)
+            .resample(
+                (
+                    deformation_field_resolution[0],
+                    deformation_field_resolution[1],
+                    deformation_field_resolution[2],
+                )
+            )
+            .data
         )
         deformation_field_data = deformation_field_data - torch.mean(
             deformation_field_data, dim=(1, 2, 3), keepdim=True

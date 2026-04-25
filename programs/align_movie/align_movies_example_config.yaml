@@ -65,9 +65,10 @@ output_config:
   loss_trajectories_output_path: null
 
 alignment_config:
-  # Required: Resolution of deformation field in pixels (x, y, z)
-  # Example: [54, 4, 4] for 54 frames, 4x4 grid
-  deformation_field_resolution: [54, 1, 1]
+  # Required: Resolution of deformation field (nt, nh, nw)
+  # nt = number of frames, nh x nw = spatial control point grid
+  # Example: [54, 4, 4] for 54 frames with a 4x4 spatial grid
+  deformation_field_resolution: [54, 4, 4]
   
   # Optional: Path to initial deformation field file
   # If not provided, deformation field will be initialized to zero
@@ -102,8 +103,13 @@ alignment_config:
   frequency_range: [300.0, 10.0]
   
   # Whether to skip movie preparation step (default: false)
-  # Set to true for subsequent passes after initial alignment
   skip_movie_preparation: false
+
+  # Whether to run a fast cross-correlation pre-pass to estimate global
+  # per-frame shifts before gradient optimization (default: true)
+  # The XC shifts seed the initial deformation field, replacing the need
+  # for a separate coarse (t, 1, 1) optimization pass.
+  use_xc_prepass: true
 
   # Plateau-style early stopping (default: false)
   # Stops optimization when the smoothed loss improvement falls below tolerance

@@ -1,4 +1,4 @@
-"""Core function for aligning frames of a cryo-EM movie."""
+"""Core function for estimating motion in a cryo-EM movie."""
 
 import torch
 from torch_motion_correction import (
@@ -12,7 +12,7 @@ from torch_motion_correction import OptimizationConfig as MotionOptimizationConf
 from torch_motion_correction.optimization_state import OptimizationTracker
 
 
-def core_align_frames(
+def core_estimate_motion(
     movie: torch.Tensor,
     initial_deformation_field: DeformationField | None,
     pixel_size: float,
@@ -20,10 +20,9 @@ def core_align_frames(
     patch_sampling: PatchSamplingConfig,
     fourier_filter: FourierFilterConfig | None = None,
     optimization: MotionOptimizationConfig | None = None,
-    do_correct_motion: bool = True,
     device: torch.device = None,
-) -> tuple[torch.Tensor, DeformationField, torch.Tensor, OptimizationTracker]:
-    """Core function for aligning frames of a cryo-EM movie.
+) -> tuple[DeformationField, OptimizationTracker]:
+    """Movie motion estimation using gradient-based fitting on cubic spline grid.
 
     Parameters
     ----------
@@ -32,6 +31,7 @@ def core_align_frames(
         mean-zero'd (i.e. the output of ``MovieConfig.prepare``).
     initial_deformation_field: DeformationField | None
         Starting deformation field. Pass None to initialise shifts from zero.
+        Typically the result of a fast cross-correlation pre-pass.
     pixel_size: float
         The pixel size in Angstroms per pixel.
     deformation_field_resolution: tuple[int, int, int]
@@ -42,18 +42,17 @@ def core_align_frames(
         Fourier-space filtering parameters (b_factor and frequency_range).
     optimization: MotionOptimizationConfig
         Gradient-based optimisation hyper-parameters.
-    do_correct_motion: bool
-        Whether to warp the movie with the estimated deformation field.
     device: torch.device
         Device to use for computation.
 
     Returns
     -------
-    tuple[torch.Tensor, DeformationField, torch.Tensor, OptimizationTracker]
-        (corrected_movie, updated_deformation_field, movie_prepared, trajectory)
+    tuple[DeformationField, OptimizationTracker]
+        The estimated deformation field (first element) and the optimization history for
+        the fit (second element).
     """
     torch.set_grad_enabled(True)
-    updated_deformation_field, trajectory = estimate_local_motion(
+    return estimate_local_motion(
         image=movie,
         pixel_spacing=pixel_size,
         deformation_field_resolution=deformation_field_resolution,
@@ -61,16 +60,37 @@ def core_align_frames(
         initial_deformation_field=initial_deformation_field,
         fourier_filter=fourier_filter,
         optimization=optimization,
+        device=device,
     )
 
-    if do_correct_motion:
-        corrected_movie = correct_motion(
-            image=movie,
-            deformation_field=updated_deformation_field,
-            pixel_spacing=pixel_size,
-            device=device,
-        )
-    else:
-        corrected_movie = movie
 
-    return corrected_movie, updated_deformation_field, movie, trajectory
+def core_align_frames(
+    movie: torch.Tensor,
+    deformation_field: DeformationField,
+    pixel_size: float,
+    device: torch.device = None,
+) -> torch.Tensor:
+    """Correct the motion of a cryo-EM movie using a deformation field.
+
+    Parameters
+    ----------
+    movie: torch.Tensor
+        The movie to align.
+    deformation_field: DeformationField
+        The estimated deformation field.
+    pixel_size: float
+        The pixel size in Angstroms per pixel.
+    device: torch.device
+        Device to use for computation.
+
+    Returns
+    -------
+    torch.Tensor
+        The motion-corrected (aligned) movie.
+    """
+    return correct_motion(
+        image=movie,
+        deformation_field=deformation_field,
+        pixel_spacing=pixel_size,
+        device=device,
+    )
