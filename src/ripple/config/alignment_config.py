@@ -31,7 +31,7 @@ class BaseAlignmentConfig(BaseModelRIPPLE):
     deformation_field_path: Optional[str]
         Path to the deformation field CSV file. If None, the backend initialises
         shifts to zero.
-    n_iterations: int
+    max_iterations: int
         Number of optimization iterations. Default is 100.
     grid_type: Literal["catmull_rom", "bspline"]
         Type of interpolation grid. Must be 'catmull_rom' or 'bspline'.
@@ -54,7 +54,7 @@ class BaseAlignmentConfig(BaseModelRIPPLE):
 
     deformation_field_resolution: tuple[PositiveInt, PositiveInt, PositiveInt]
     deformation_field_path: str | None = None  # .csv or .hdf5/.h5
-    n_iterations: PositiveInt = 100
+    max_iterations: PositiveInt = 100
     grid_type: Literal["catmull_rom", "bspline"] = "catmull_rom"
     optimizer_type: Literal["adam", "lbfgs"] = "adam"
     learning_rate: float = 0.2
@@ -96,7 +96,7 @@ class BaseAlignmentConfig(BaseModelRIPPLE):
             backend.
         """
         return MotionOptimizationConfig(
-            max_iterations=self.n_iterations,
+            max_iterations=self.max_iterations,
             optimizer_type=self.optimizer_type,
             grid_type=self.grid_type,
             optimizer_kwargs={"lr": self.learning_rate},
@@ -194,7 +194,7 @@ class AlignFramesConfig(BaseAlignmentConfig):
         Extends the base implementation to include ``loss_type``.
         """
         return MotionOptimizationConfig(
-            max_iterations=self.n_iterations,
+            max_iterations=self.max_iterations,
             optimizer_type=self.optimizer_type,
             loss_type=self.loss_type,
             grid_type=self.grid_type,
