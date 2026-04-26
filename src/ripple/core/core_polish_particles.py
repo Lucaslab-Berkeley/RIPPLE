@@ -730,8 +730,7 @@ def estimate_local_motion_2dtm_particles_bayesian(
     try:
         for iter_idx in pbar:
             if save_intermediate_fields:
-                write_deformation_field_to_csv(
-                    deformation_field.data,
+                deformation_field.to_csv(
                     f"{intermediate_fields_dir}/particle_deformation_field_{iter_idx}.csv",
                 )
 

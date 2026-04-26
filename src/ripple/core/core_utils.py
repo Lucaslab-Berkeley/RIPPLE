@@ -273,7 +273,7 @@ def _create_batch_configs(
 # TODO: re-enable
 def _make_differentiable_refine_manager(
     refine_config_path: str,
-) -> "RefineTemplateManager":
+) -> "RefineTemplateManager":  # type: ignore[name-defined]
     """
     Make a differentiable refine manager from a particle results path.
 

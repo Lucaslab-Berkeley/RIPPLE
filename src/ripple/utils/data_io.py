@@ -12,7 +12,6 @@ import pandas as pd
 import torch
 import yaml
 from tifffile import TiffFile
-from torch_motion_correction import DeformationField
 from torch_motion_correction.optimization_state import OptimizationTracker
 
 
@@ -264,44 +263,6 @@ def load_movie_from_path(file_path: str | os.PathLike | Path) -> torch.Tensor:
     raise ValueError(f"Unsupported movie file extension: {file_path}")
 
 
-def load_deformation_field(
-    file_path: str | os.PathLike | Path,
-) -> torch.Tensor:
-    """Helper function for loading a deformation field from a CSV file.
-
-    Parameters
-    ----------
-    file_path : str | os.PathLike | Path
-        Path to the CSV file.
-
-    Returns
-    -------
-    torch.Tensor
-        The deformation field as a tensor.
-    """
-    return DeformationField.from_csv(file_path).data
-
-
-def save_deformation_field(
-    deformation_field: torch.Tensor,
-    file_path: str | os.PathLike | Path,
-) -> None:
-    """Helper function for saving a deformation field to a CSV file.
-
-    Parameters
-    ----------
-    deformation_field : torch.Tensor
-        The deformation field to save.
-    file_path : str | os.PathLike | Path
-        Path to the CSV file.
-
-    Returns
-    -------
-    None
-    """
-    DeformationField(data=deformation_field).to_csv(file_path)
-
-
 def write_trajectory_to_csv(
     trajectory: OptimizationTracker,
     file_path: str | os.PathLike | Path,
@@ -319,9 +280,10 @@ def write_trajectory_to_csv(
     -------
     None
     """
-    df = pd.DataFrame(
-        [{"step": cp.step, "loss": cp.loss} for cp in trajectory.checkpoints]
-    )
+    data = trajectory.as_dict()
+
+    # Write the loss trajectory to a CSV file
+    df = pd.DataFrame(data["optimization_checkpoints"])
     df.to_csv(file_path, index=False)
 
 

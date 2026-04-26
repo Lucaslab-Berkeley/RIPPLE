@@ -1,5 +1,6 @@
 """Utility functions for managers."""
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import torch
@@ -7,7 +8,6 @@ from torch_motion_correction import DeformationField
 
 from ripple.core import generate_dose_weighted_image, sum_movie
 from ripple.utils.data_io import (
-    save_deformation_field,
     write_mrc_from_tensor,
     write_trajectory_to_csv,
 )
@@ -143,10 +143,11 @@ def save_results(
 
     # Save deformation field if wanted
     if output_config.deformation_field_output_path is not None:
-        save_deformation_field(
-            updated_deformation_field.data.cpu(),
-            output_config.deformation_field_output_path,
-        )
+        def_path = Path(output_config.deformation_field_output_path)
+        if def_path.suffix in (".h5", ".hdf5"):
+            updated_deformation_field.to_hdf5(def_path)
+        else:
+            updated_deformation_field.to_csv(def_path)
 
     # Save non-dw sum movie if wanted
     if output_config.non_dw_sum_output_path is not None:

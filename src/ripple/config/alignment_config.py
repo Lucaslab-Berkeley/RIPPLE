@@ -1,5 +1,6 @@
 """Configuration for alignment of frames of a cryo-EM movie."""
 
+from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import Field, field_validator
@@ -11,7 +12,6 @@ from torch_motion_correction import (
 from torch_motion_correction import OptimizationConfig as MotionOptimizationConfig
 
 from ripple.utils.custom_types import BaseModelRIPPLE
-from ripple.utils.data_io import load_deformation_field
 
 # Type alias for positive integer
 PositiveInt = Annotated[int, Field(gt=0)]
@@ -53,7 +53,7 @@ class BaseAlignmentConfig(BaseModelRIPPLE):
     """
 
     deformation_field_resolution: tuple[PositiveInt, PositiveInt, PositiveInt]
-    deformation_field_path: str | None = None
+    deformation_field_path: str | None = None  # .csv or .hdf5/.h5
     n_iterations: PositiveInt = 100
     grid_type: Literal["catmull_rom", "bspline"] = "catmull_rom"
     optimizer_type: Literal["adam", "lbfgs"] = "adam"
@@ -80,9 +80,10 @@ class BaseAlignmentConfig(BaseModelRIPPLE):
         if self.deformation_field_path is None:
             return None
 
-        data = load_deformation_field(self.deformation_field_path)
-
-        return DeformationField(data=data, grid_type=self.grid_type)
+        path = Path(self.deformation_field_path)
+        if path.suffix in (".h5", ".hdf5"):
+            return DeformationField.from_hdf5(path)
+        return DeformationField.from_csv(path, grid_type=self.grid_type)
 
     @property
     def as_optimization_config(self) -> MotionOptimizationConfig:

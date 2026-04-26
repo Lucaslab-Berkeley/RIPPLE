@@ -52,7 +52,7 @@ def core_estimate_motion(
         the fit (second element).
     """
     torch.set_grad_enabled(True)
-    return estimate_local_motion(
+    return estimate_local_motion(  # type: ignore[no-any-return]
         image=movie,
         pixel_spacing=pixel_size,
         deformation_field_resolution=deformation_field_resolution,
