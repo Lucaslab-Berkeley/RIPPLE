@@ -7,7 +7,9 @@ from pydantic import ConfigDict
 from torch_motion_correction import (
     DeformationField,
     OptimizationTracker,
+    correct_motion,
     estimate_global_motion,
+    estimate_local_motion,
 )
 
 from ripple.config import (
@@ -16,7 +18,6 @@ from ripple.config import (
     MovieConfig,
     OutputConfig,
 )
-from ripple.core import core_align_frames, core_estimate_motion
 from ripple.managers import manager_utils
 from ripple.utils.custom_types import BaseModelRIPPLE
 
@@ -35,7 +36,7 @@ class AlignFramesManager(BaseModelRIPPLE):
         movie: torch.Tensor,
         initial_deformation_field: DeformationField | None = None,
     ) -> dict[str, Any]:
-        """Build the kwargs dict for :func:`~ripple.core.core_align_frames`.
+        """Build the kwargs dict for :func:`~torch_motion_correction.estimate_local_motion`.
 
         Parameters
         ----------
@@ -53,9 +54,9 @@ class AlignFramesManager(BaseModelRIPPLE):
             else self.alignment_config.initial_deformation_field
         )
         return {
-            "movie": movie,
+            "image": movie,
             "initial_deformation_field": deformation_field,
-            "pixel_size": self.movie_config.pixel_size,
+            "pixel_spacing": self.movie_config.pixel_size,
             "deformation_field_resolution": (
                 self.alignment_config.deformation_field_resolution
             ),
@@ -137,7 +138,8 @@ class AlignFramesManager(BaseModelRIPPLE):
             )
 
         kwargs = self._setup_estimation_kwargs(movie, initial_deformation_field)
-        return core_estimate_motion(**kwargs)
+        torch.set_grad_enabled(True)
+        return estimate_local_motion(**kwargs)  # type: ignore[return-value]
 
     def correct_and_save(
         self,
@@ -157,10 +159,10 @@ class AlignFramesManager(BaseModelRIPPLE):
             Optimization history (output of :meth:`estimate_motion`).
         """
         device = self.computational_config.gpu_device
-        corrected_movie = core_align_frames(
-            movie=movie,
+        corrected_movie = correct_motion(
+            image=movie,
             deformation_field=deformation_field,
-            pixel_size=self.movie_config.pixel_size,
+            pixel_spacing=self.movie_config.pixel_size,
             device=device,
         )
         manager_utils.save_results(

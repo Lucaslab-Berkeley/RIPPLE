@@ -9,12 +9,12 @@ from torch_motion_correction import (
     DeformationField,
     PatchSamplingConfig,
     correct_motion,
+    estimate_local_motion,
 )
 from torch_motion_correction import OptimizationConfig as MotionOptimizationConfig
 from torch_motion_correction.optimization_state import OptimizationTracker
 
 import ripple
-from ripple.core.core_align_frames import core_estimate_motion
 from ripple.core.prepare_movie import prepare_movie
 
 
@@ -53,11 +53,11 @@ def fast_optimization():
 def test_estimate_motion_basic(
     sample_movie, sample_deformation_field, patch_sampling, fast_optimization
 ):
-    """Test basic functionality of core_estimate_motion."""
-    deformation_field, trajectory = core_estimate_motion(
-        movie=sample_movie,
+    """Test basic functionality of estimate_local_motion."""
+    deformation_field, trajectory = estimate_local_motion(
+        image=sample_movie,
         initial_deformation_field=sample_deformation_field,
-        pixel_size=1.0,
+        pixel_spacing=1.0,
         deformation_field_resolution=(1, 8, 8),
         patch_sampling=patch_sampling,
         optimization=fast_optimization,
@@ -71,11 +71,11 @@ def test_estimate_motion_basic(
 def test_estimate_motion_then_correct(
     sample_movie, sample_deformation_field, patch_sampling, fast_optimization
 ):
-    """Test that core_estimate_motion output can be used with correct_motion."""
-    deformation_field, _ = core_estimate_motion(
-        movie=sample_movie,
+    """Test that estimate_local_motion output can be used with correct_motion."""
+    deformation_field, _ = estimate_local_motion(
+        image=sample_movie,
         initial_deformation_field=sample_deformation_field,
-        pixel_size=1.0,
+        pixel_spacing=1.0,
         deformation_field_resolution=(1, 8, 8),
         patch_sampling=patch_sampling,
         optimization=fast_optimization,
@@ -96,10 +96,10 @@ def test_estimate_motion_single_frame(
     """Test estimate_motion with a single frame movie."""
     single_frame_movie = torch.randn(1, 64, 64, dtype=torch.float32)
 
-    deformation_field, _ = core_estimate_motion(
-        movie=single_frame_movie,
+    deformation_field, _ = estimate_local_motion(
+        image=single_frame_movie,
         initial_deformation_field=sample_deformation_field,
-        pixel_size=1.0,
+        pixel_spacing=1.0,
         deformation_field_resolution=(1, 8, 8),
         patch_sampling=patch_sampling,
         optimization=fast_optimization,
@@ -115,10 +115,10 @@ def test_estimate_motion_with_gain_map(
     gain_map = torch.ones(64, 64, dtype=torch.float32) * 2.0
     prepared = prepare_movie(sample_movie, gain_map, None, gain_flip=0, gain_rot=0)
 
-    deformation_field, _ = core_estimate_motion(
-        movie=prepared,
+    deformation_field, _ = estimate_local_motion(
+        image=prepared,
         initial_deformation_field=sample_deformation_field,
-        pixel_size=1.0,
+        pixel_spacing=1.0,
         deformation_field_resolution=(1, 8, 8),
         patch_sampling=patch_sampling,
         optimization=fast_optimization,
@@ -139,10 +139,10 @@ def test_estimate_motion_with_dark_map(
     dark_map = torch.ones(64, 64, dtype=torch.float32) * 0.5
     prepared = prepare_movie(sample_movie, None, dark_map, gain_flip=0, gain_rot=0)
 
-    deformation_field, _ = core_estimate_motion(
-        movie=prepared,
+    deformation_field, _ = estimate_local_motion(
+        image=prepared,
         initial_deformation_field=sample_deformation_field,
-        pixel_size=1.0,
+        pixel_spacing=1.0,
         deformation_field_resolution=(1, 8, 8),
         patch_sampling=patch_sampling,
         optimization=fast_optimization,
@@ -160,10 +160,10 @@ def test_estimate_motion_no_initial_field(
     sample_movie, patch_sampling, fast_optimization
 ):
     """Test estimate_motion with no initial deformation field (zero-initialized)."""
-    deformation_field, trajectory = core_estimate_motion(
-        movie=sample_movie,
+    deformation_field, trajectory = estimate_local_motion(
+        image=sample_movie,
         initial_deformation_field=None,
-        pixel_size=1.0,
+        pixel_spacing=1.0,
         deformation_field_resolution=(1, 8, 8),
         patch_sampling=patch_sampling,
         optimization=fast_optimization,

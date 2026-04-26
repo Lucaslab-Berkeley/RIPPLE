@@ -19,7 +19,7 @@ name = "RIPPLE"
 dynamic = ["version"]
 description = "Cryo-EM movie frame alignment and polishing. RIPPLE: Realigning image patches and polishing local environment"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "BSD-3-Clause" }
 authors = [{ name = "Josh Dickerson", email = "jdickerson@berkeley.edu" }]
 # https://pypi.org/classifiers/
@@ -47,11 +47,13 @@ dependencies = [
     "pyyaml",
     "tqdm",
     "types-PyYAML",
+    "teamtomo-basemodel",
     "torch-motion-correction>=0.0.5",
     "torch-fourier-filter",
     "leopard-em",
     "scipy",
     "optuna",
+    "h5py",
 ]
 
 # https://peps.python.org/pep-0621/#dependencies-optional-dependencies
@@ -134,7 +136,10 @@ skip-magic-trailing-comma = false  # default is false
 minversion = "7.0"
 addopts = ["--color=yes"]
 testpaths = ["tests"]
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    "ignore:`torch.jit.script_method` is deprecated:DeprecationWarning",
+]
 
 # https://mypy.readthedocs.io/en/stable/config_file.html
 [tool.mypy]
