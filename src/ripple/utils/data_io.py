@@ -50,7 +50,7 @@ def _load_tiff_array(tif_path: str | os.PathLike | Path) -> np.ndarray:
 
 
 def _load_mrc_array(mrc_path: str | os.PathLike | Path) -> np.ndarray:
-    array = mrcfile.read(mrc_path, permissive=True)
+    array = mrcfile.read(mrc_path)
     # Convert float16 to float32 for FFT compatibility
     if array.dtype == np.float16:
         array = array.astype(np.float32)
