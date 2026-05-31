@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+import dm4
 import eerfile
 import mrcfile
 import numpy as np
@@ -42,59 +43,42 @@ def render_eer_to_tensor(
     return torch.tensor(movie_data, dtype=torch.float32)
 
 
-def read_tif_to_tensor(tif_path: str | os.PathLike | Path) -> torch.Tensor:
-    """Reads a TIFF file and returns the data as a tensor.
-
-    Parameters
-    ----------
-    tif_path : str | os.PathLike | Path
-        Path to the TIFF file.
-
-    Returns
-    -------
-    torch.Tensor
-        The TIFF data as a tensor, copied and converted to float32 if needed.
-    """
+def _load_tiff_array(tif_path: str | os.PathLike | Path) -> np.ndarray:
     with TiffFile(tif_path) as tiff:
         tif_frames = tiff.asarray()
-    return torch.tensor(tif_frames, dtype=torch.float32)
+    return np.asarray(tif_frames, dtype=np.float32)
 
 
-def read_mrc_to_numpy(mrc_path: str | os.PathLike | Path) -> np.ndarray:
-    """Reads an MRC file and returns the data as a numpy array.
-
-    Parameters
-    ----------
-    mrc_path : str | os.PathLike | Path
-        Path to the MRC file.
-
-    Returns
-    -------
-    np.ndarray
-        The MRC data as a numpy array, copied.
-    """
-    with mrcfile.open(mrc_path) as mrc:
-        return mrc.data.copy()
-
-
-def read_mrc_to_tensor(mrc_path: str | os.PathLike | Path) -> torch.Tensor:
-    """Reads an MRC file and returns the data as a torch tensor.
-
-    Parameters
-    ----------
-    mrc_path : str | os.PathLike | Path
-        Path to the MRC file.
-
-    Returns
-    -------
-    torch.Tensor
-        The MRC data as a tensor, copied and converted to float32 if needed.
-    """
-    tensor = torch.tensor(read_mrc_to_numpy(mrc_path))
+def _load_mrc_array(mrc_path: str | os.PathLike | Path) -> np.ndarray:
+    array = mrcfile.read(mrc_path, permissive=True)
     # Convert float16 to float32 for FFT compatibility
-    if tensor.dtype == torch.float16:
-        tensor = tensor.to(torch.float32)
-    return tensor
+    if array.dtype == np.float16:
+        array = array.astype(np.float32)
+    return array
+
+
+def _load_dm4_array(dm4_path: str | os.PathLike | Path) -> np.ndarray:
+    with dm4.DM4File.open(dm4_path) as dm4file:
+        tags = dm4file.read_directory()
+
+        image_data_tag = (
+            tags.named_subdirs["ImageList"]
+            .unnamed_subdirs[1]
+            .named_subdirs["ImageData"]
+        )
+        image_tag = image_data_tag.named_tags["Data"]
+
+        x_dim = dm4file.read_tag_data(
+            image_data_tag.named_subdirs["Dimensions"].unnamed_tags[0]
+        )
+        y_dim = dm4file.read_tag_data(
+            image_data_tag.named_subdirs["Dimensions"].unnamed_tags[1]
+        )
+
+        image_array = np.array(dm4file.read_tag_data(image_tag), dtype=np.float32)
+        image_array = np.reshape(image_array, (y_dim, x_dim))
+
+        return image_array
 
 
 def write_mrc_from_numpy(
@@ -149,118 +133,67 @@ def write_mrc_from_tensor(
     write_mrc_from_numpy(data.numpy(), mrc_path, mrc_header, overwrite)
 
 
-def load_mrc_image(file_path: str | os.PathLike | Path) -> torch.Tensor:
-    """Helper function for loading an two-dimensional MRC image into a tensor.
+def load_array_from_path(
+    file_path: str | os.PathLike | Path,
+    expected_ndim: int | None = None,
+    squeeze: bool = True,
+) -> np.ndarray:
+    """Load an array-like file into memory as a numpy array.
 
     Parameters
     ----------
     file_path : str | os.PathLike | Path
-        Path to the MRC file.
+        Path to the file. Supported extensions: ``.mrc``, ``.tif``, ``.tiff``,
+        ``.gain``, ``.dark``, ``.dm4``.
+    expected_ndim : int | None
+        Expected number of dimensions after optional squeezing. Default None
+        skips shape validation.
+    squeeze : bool
+        Squeeze singleton dimensions before validating shape. Default True.
 
     Returns
     -------
-    torch.Tensor
-        The MRC image as a tensor, converted to float32 for FFT compatibility.
+    np.ndarray
+        The loaded data as a float32 array.
 
     Raises
     ------
     ValueError
-        If the MRC file is not two-dimensional.
+        If the file extension is not supported or the shape does not match.
     """
-    tensor = read_mrc_to_tensor(file_path)
+    path_str = str(file_path)
 
-    # Check that tensor is 2D, squeezing if necessary
-    tensor = tensor.squeeze()
-    if len(tensor.shape) != 2:
-        raise ValueError(f"MRC file is not two-dimensional. Got shape: {tensor.shape}")
+    if path_str.endswith(".mrc"):
+        array = _load_mrc_array(path_str)
+    elif any(path_str.endswith(ext) for ext in (".tif", ".tiff", ".gain", ".dark")):
+        array = _load_tiff_array(path_str)
+    elif path_str.endswith(".dm4"):
+        array = _load_dm4_array(path_str)
+    else:
+        raise ValueError(f"Unsupported file extension: {file_path}")
 
-    return tensor
-
-
-def load_mrc_movie(file_path: str | os.PathLike | Path) -> torch.Tensor:
-    """Helper function for loading an three-dimensional MRC movie into a tensor.
-
-    Parameters
-    ----------
-    file_path : str | os.PathLike | Path
-        Path to the MRC file.
-
-    Returns
-    -------
-    torch.Tensor
-        The MRC movie as a tensor, converted to float32 for FFT compatibility.
-
-    Raises
-    ------
-    ValueError
-        If the MRC file is not three-dimensional.
-    """
-    tensor = read_mrc_to_tensor(file_path)
-
-    # Check that tensor is 3D, squeezing if necessary
-    tensor = tensor.squeeze()
-    if len(tensor.shape) != 3:
+    if squeeze:
+        array = np.squeeze(array)
+    if expected_ndim is not None and len(array.shape) != expected_ndim:
         raise ValueError(
-            f"MRC file is not three-dimensional. Got shape: {tensor.shape}"
+            f"Unexpected array shape for {file_path}. Got shape: {array.shape}"
         )
 
-    return tensor
+    return array
 
 
-def load_image_from_path(file_path: str | os.PathLike | Path) -> torch.Tensor:
-    """Load a 2-D image (gain map or dark map) from an MRC or TIFF-family file.
-
-    Parameters
-    ----------
-    file_path : str | os.PathLike | Path
-        Path to the image file. Supported extensions: ``.mrc``,
-        ``.tif``, ``.tiff``, ``.gain``, ``.dark``.
-
-    Returns
-    -------
-    torch.Tensor
-        The image as a 2-D float32 tensor.
-
-    Raises
-    ------
-    ValueError
-        If the file extension is not supported.
-    """
-    path_str = str(file_path)
-    if path_str.endswith(".mrc"):
-        return load_mrc_image(path_str)
-    if any(path_str.endswith(ext) for ext in (".tif", ".tiff", ".gain", ".dark")):
-        return read_tif_to_tensor(path_str)
-    raise ValueError(f"Unsupported image file extension: {file_path}")
-
-
-def load_movie_from_path(file_path: str | os.PathLike | Path) -> torch.Tensor:
-    """Load a 3-D movie from an MRC or TIFF file.
-
-    For EER files use :func:`render_eer_to_tensor` directly (it requires
-    additional fluence arguments that are not available here).
-
-    Parameters
-    ----------
-    file_path : str | os.PathLike | Path
-        Path to the movie file. Supported extensions: ``.mrc``, ``.tif``.
-
-    Returns
-    -------
-    torch.Tensor
-        The movie as a 3-D float32 tensor.
-
-    Raises
-    ------
-    ValueError
-        If the file extension is not supported.
-    """
-    path_str = str(file_path)
-    if path_str.endswith(".mrc"):
-        return load_mrc_movie(path_str)
-    if path_str.endswith(".tif"):
-        return read_tif_to_tensor(path_str)
-    raise ValueError(f"Unsupported movie file extension: {file_path}")
+def load_tensor_from_path(
+    file_path: str | os.PathLike | Path,
+    expected_ndim: int | None = None,
+    squeeze: bool = True,
+) -> torch.Tensor:
+    """Load an array-like file into memory as a tensor."""
+    array = load_array_from_path(
+        file_path,
+        expected_ndim=expected_ndim,
+        squeeze=squeeze,
+    )
+    return torch.tensor(array, dtype=torch.float32)
 
 
 def write_trajectory_to_csv(
@@ -319,7 +252,7 @@ def load_template_volume_from_config(
         template_volume_path = str(Path(template_volume_path).resolve())
 
     # Read MRC file and convert to float32 tensor
-    template_volume = read_mrc_to_tensor(template_volume_path)
+    template_volume = load_tensor_from_path(template_volume_path)
 
     return template_volume
 

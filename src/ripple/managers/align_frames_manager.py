@@ -36,7 +36,7 @@ class AlignFramesManager(BaseModelRIPPLE):
         movie: torch.Tensor,
         initial_deformation_field: DeformationField | None = None,
     ) -> dict[str, Any]:
-        """Build the kwargs dict for :func:`~torch_motion_correction.estimate_local_motion`.
+        """Build the kwargs for :func:`~torch_motion_correction.estimate_local_motion`.
 
         Parameters
         ----------
@@ -139,7 +139,7 @@ class AlignFramesManager(BaseModelRIPPLE):
 
         kwargs = self._setup_estimation_kwargs(movie, initial_deformation_field)
         torch.set_grad_enabled(True)
-        return estimate_local_motion(**kwargs)  # type: ignore[return-value]
+        return estimate_local_motion(**kwargs)  # type: ignore[no-any-return]
 
     def correct_and_save(
         self,

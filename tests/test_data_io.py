@@ -9,7 +9,7 @@ import torch
 from tifffile import imwrite
 
 from ripple.config.movie_config import MovieConfig
-from ripple.utils.data_io import load_image_from_path, load_movie_from_path
+from ripple.utils.data_io import load_array_from_path, load_tensor_from_path
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -63,80 +63,88 @@ def tif_movie(tmp_path, movie_data):
 
 
 # ---------------------------------------------------------------------------
-# load_image_from_path
+# load_tensor_from_path (images)
 # ---------------------------------------------------------------------------
 
 
-def test_load_image_from_path_mrc(mrc_image):
+def test_load_tensor_from_path_image_mrc(mrc_image):
     path, data = mrc_image
-    result = load_image_from_path(path)
+    result = load_tensor_from_path(path, expected_ndim=2)
     assert isinstance(result, torch.Tensor)
     assert result.shape == torch.Size([16, 16])
     assert torch.allclose(result, torch.tensor(data))
 
 
-def test_load_image_from_path_tif(tif_image):
+def test_load_tensor_from_path_image_tif(tif_image):
     path, data = tif_image
-    result = load_image_from_path(path)
+    result = load_tensor_from_path(path, expected_ndim=2)
     assert isinstance(result, torch.Tensor)
     assert result.shape == torch.Size([16, 16])
     assert torch.allclose(result, torch.tensor(data))
 
 
-def test_load_image_from_path_tiff_extension(tmp_path, image_data):
+def test_load_array_from_path_image_tif(tif_image):
+    path, data = tif_image
+    result = load_array_from_path(path, expected_ndim=2)
+    assert isinstance(result, np.ndarray)
+    assert result.shape == (16, 16)
+    assert np.allclose(result, data)
+
+
+def test_load_tensor_from_path_image_tiff_extension(tmp_path, image_data):
     path = tmp_path / "image.tiff"
     imwrite(str(path), image_data)
-    result = load_image_from_path(path)
+    result = load_tensor_from_path(path, expected_ndim=2)
     assert result.shape == torch.Size([16, 16])
 
 
-def test_load_image_from_path_gain_extension(tmp_path, image_data):
+def test_load_tensor_from_path_image_gain_extension(tmp_path, image_data):
     path = tmp_path / "image.gain"
     imwrite(str(path), image_data)
-    result = load_image_from_path(path)
+    result = load_tensor_from_path(path, expected_ndim=2)
     assert result.shape == torch.Size([16, 16])
 
 
-def test_load_image_from_path_dark_extension(tmp_path, image_data):
+def test_load_tensor_from_path_image_dark_extension(tmp_path, image_data):
     path = tmp_path / "image.dark"
     imwrite(str(path), image_data)
-    result = load_image_from_path(path)
+    result = load_tensor_from_path(path, expected_ndim=2)
     assert result.shape == torch.Size([16, 16])
 
 
-def test_load_image_from_path_unsupported_extension(tmp_path):
+def test_load_tensor_from_path_image_unsupported_extension(tmp_path):
     path = tmp_path / "image.xyz"
     path.write_bytes(b"dummy")
-    with pytest.raises(ValueError, match="Unsupported image file extension"):
-        load_image_from_path(path)
+    with pytest.raises(ValueError, match="Unsupported file extension"):
+        load_tensor_from_path(path, expected_ndim=2)
 
 
 # ---------------------------------------------------------------------------
-# load_movie_from_path
+# load_tensor_from_path (movies)
 # ---------------------------------------------------------------------------
 
 
-def test_load_movie_from_path_mrc(mrc_movie):
+def test_load_tensor_from_path_movie_mrc(mrc_movie):
     path, data = mrc_movie
-    result = load_movie_from_path(path)
+    result = load_tensor_from_path(path, expected_ndim=3)
     assert isinstance(result, torch.Tensor)
     assert result.shape == torch.Size([20, 16, 16])
     assert torch.allclose(result, torch.tensor(data))
 
 
-def test_load_movie_from_path_tif(tif_movie):
+def test_load_tensor_from_path_movie_tif(tif_movie):
     path, data = tif_movie
-    result = load_movie_from_path(path)
+    result = load_tensor_from_path(path, expected_ndim=3)
     assert isinstance(result, torch.Tensor)
     assert result.shape == torch.Size([20, 16, 16])
     assert torch.allclose(result, torch.tensor(data))
 
 
-def test_load_movie_from_path_unsupported_extension(tmp_path):
+def test_load_tensor_from_path_movie_unsupported_extension(tmp_path):
     path = tmp_path / "movie.eer"
     path.write_bytes(b"dummy")
-    with pytest.raises(ValueError, match="Unsupported movie file extension"):
-        load_movie_from_path(path)
+    with pytest.raises(ValueError, match="Unsupported file extension"):
+        load_tensor_from_path(path, expected_ndim=3)
 
 
 # ---------------------------------------------------------------------------

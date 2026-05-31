@@ -5,11 +5,7 @@ from pydantic import field_validator
 
 from ripple.core.prepare_movie import prepare_movie
 from ripple.utils.custom_types import BaseModelRIPPLE
-from ripple.utils.data_io import (
-    load_image_from_path,
-    load_movie_from_path,
-    render_eer_to_tensor,
-)
+from ripple.utils.data_io import load_tensor_from_path, render_eer_to_tensor
 
 
 class MovieConfig(BaseModelRIPPLE):
@@ -113,18 +109,18 @@ class MovieConfig(BaseModelRIPPLE):
             return render_eer_to_tensor(
                 self.movie_path, self.fluence_per_frame, self.fluence
             )
-        return load_movie_from_path(self.movie_path)
+        return load_tensor_from_path(self.movie_path, expected_ndim=3)
 
     @property
     def gain(self) -> torch.Tensor:
         """Get the gain tensor."""
         if self.gain_path is None:
             return None
-        return load_image_from_path(self.gain_path)
+        return load_tensor_from_path(self.gain_path, expected_ndim=2)
 
     @property
     def dark(self) -> torch.Tensor:
         """Get the dark tensor."""
         if self.dark_path is None:
             return None
-        return load_image_from_path(self.dark_path)
+        return load_tensor_from_path(self.dark_path, expected_ndim=2)

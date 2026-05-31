@@ -2,9 +2,8 @@
 
 from .custom_types import BaseModelRIPPLE, ExcludedTensor
 from .data_io import (
-    load_mrc_image,
-    load_mrc_movie,
-    read_tif_to_tensor,
+    load_array_from_path,
+    load_tensor_from_path,
     render_eer_to_tensor,
     write_mrc_from_tensor,
     write_trajectory_to_csv,
@@ -13,9 +12,8 @@ from .data_io import (
 __all__ = [
     "BaseModelRIPPLE",
     "ExcludedTensor",
-    "load_mrc_image",
-    "load_mrc_movie",
-    "read_tif_to_tensor",
+    "load_array_from_path",
+    "load_tensor_from_path",
     "render_eer_to_tensor",
     "write_mrc_from_tensor",
     "write_trajectory_to_csv",

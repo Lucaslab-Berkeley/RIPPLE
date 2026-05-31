@@ -54,6 +54,7 @@ dependencies = [
     "scipy",
     "optuna",
     "h5py",
+    "dm4",
 ]
 
 # https://peps.python.org/pep-0621/#dependencies-optional-dependencies

@@ -21,7 +21,7 @@ from ripple.config import (
 from ripple.core import core_optimize_sigmas, core_polish_particles
 from ripple.managers import manager_utils
 from ripple.utils.custom_types import BaseModelRIPPLE
-from ripple.utils.data_io import read_mrc_to_tensor
+from ripple.utils.data_io import load_tensor_from_path
 
 
 class PolishParticlesManager(BaseModelRIPPLE):
@@ -270,8 +270,8 @@ def _load_refine_results(
     particle_indices = df.index
     indices_list.append(particle_indices)
     # Load MRC files and convert to tensors
-    var_image = read_mrc_to_tensor(var_image_path)
-    mean_image = read_mrc_to_tensor(mean_image_path)
+    var_image = load_tensor_from_path(var_image_path)
+    mean_image = load_tensor_from_path(mean_image_path)
 
     if var_image.ndim == 2:
         var_image = einops.rearrange(var_image, "h w -> 1 h w")
