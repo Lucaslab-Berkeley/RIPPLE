@@ -1,5 +1,6 @@
 """Utility functions for managers."""
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -26,11 +27,22 @@ if TYPE_CHECKING:
 # Tuple of (movie, gain_map, dark_map, mask, initial_deformation_field)
 LoadedTensors = tuple[
     torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
+    torch.Tensor | None,
+    torch.Tensor | None,
     torch.Tensor | None,
     DeformationField | None,
 ]
+
+
+def _load_or_move(
+    value: torch.Tensor | None,
+    loader: Callable[[], torch.Tensor | None],
+    device: torch.device,
+) -> torch.Tensor | None:
+    """Return `value` moved to `device`, loading it via `loader()` first if None."""
+    if value is None:
+        value = loader()
+    return value.to(device) if value is not None else None
 
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -83,26 +95,9 @@ def load_missing_tensors(
     if movie is None:
         movie = movie_config.movie
 
-    if gain_map is None:
-        gain_map = movie_config.gain
-        if gain_map is not None:
-            gain_map = gain_map.to(device)
-    else:
-        gain_map = gain_map.to(device)
-
-    if dark_map is None:
-        dark_map = movie_config.dark
-        if dark_map is not None:
-            dark_map = dark_map.to(device)
-    else:
-        dark_map = dark_map.to(device)
-
-    if mask is None:
-        mask = movie_config.mask
-        if mask is not None:
-            mask = mask.to(device)
-    else:
-        mask = mask.to(device)
+    gain_map = _load_or_move(gain_map, lambda: movie_config.gain, device)
+    dark_map = _load_or_move(dark_map, lambda: movie_config.dark, device)
+    mask = _load_or_move(mask, lambda: movie_config.mask, device)
 
     if initial_deformation_field is None:
         initial_deformation_field = alignment_config.initial_deformation_field
@@ -112,6 +107,46 @@ def load_missing_tensors(
         initial_deformation_field = initial_deformation_field.to(device)
 
     return movie, gain_map, dark_map, mask, initial_deformation_field
+
+
+# pylint: disable=too-many-arguments,too-many-positional-arguments
+def prepare_movie_if_needed(
+    movie_config: "MovieConfig",
+    alignment_config: "BaseAlignmentConfig",
+    movie: torch.Tensor,
+    gain_map: torch.Tensor | None,
+    dark_map: torch.Tensor | None,
+    mask: torch.Tensor | None,
+    device: torch.device,
+) -> torch.Tensor:
+    """Prepare the movie unless `alignment_config.skip_movie_preparation` is set.
+
+    Parameters
+    ----------
+    movie_config: MovieConfig
+        Movie configuration providing the gain/dark/mask correction settings.
+    alignment_config: BaseAlignmentConfig
+        Alignment configuration; only ``skip_movie_preparation`` is read.
+    movie: torch.Tensor
+        Raw movie tensor.
+    gain_map: torch.Tensor | None
+        Gain map tensor, or None to skip gain correction.
+    dark_map: torch.Tensor | None
+        Dark map tensor, or None to skip dark correction.
+    mask: torch.Tensor | None
+        Mask with shape (height, width), or None to skip masking.
+    device: torch.device
+        Device to prepare the movie on.
+
+    Returns
+    -------
+    torch.Tensor
+        The prepared movie, or the original movie if ``skip_movie_preparation`` is
+        True.
+    """
+    if alignment_config.skip_movie_preparation:
+        return movie
+    return movie_config.prepare(movie, gain_map, dark_map, mask=mask, device=device)
 
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments

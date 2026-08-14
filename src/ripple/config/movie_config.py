@@ -143,23 +143,24 @@ class MovieConfig(BaseModelRIPPLE):
             )
         return load_tensor_from_path(self.movie_path, expected_ndim=3)
 
-    @property
-    def gain(self) -> torch.Tensor:
-        """Get the gain tensor."""
-        if self.gain_path is None:
+    @staticmethod
+    def _load_2d(path: str | None) -> torch.Tensor | None:
+        """Load a (height, width) tensor from `path`, or None if `path` is unset."""
+        if path is None:
             return None
-        return load_tensor_from_path(self.gain_path, expected_ndim=2)
+        return load_tensor_from_path(path, expected_ndim=2)
+
+    @property
+    def gain(self) -> torch.Tensor | None:
+        """Get the gain tensor."""
+        return self._load_2d(self.gain_path)
 
     @property
     def mask(self) -> torch.Tensor | None:
         """Get the mask tensor."""
-        if self.mask_path is None:
-            return None
-        return load_tensor_from_path(self.mask_path, expected_ndim=2)
+        return self._load_2d(self.mask_path)
 
     @property
-    def dark(self) -> torch.Tensor:
+    def dark(self) -> torch.Tensor | None:
         """Get the dark tensor."""
-        if self.dark_path is None:
-            return None
-        return load_tensor_from_path(self.dark_path, expected_ndim=2)
+        return self._load_2d(self.dark_path)

@@ -10,7 +10,6 @@ from ripple.core.prepare_movie import (
     apply_dark,
     apply_gain,
     apply_mask,
-    prepare_core,
     prepare_movie,
     remove_hot_pixels,
 )
@@ -323,44 +322,6 @@ def test_prepare_movie_no_gain_no_dark(sample_movie):
     assert result.shape == sample_movie.shape
 
     # Should have mean zero frames
-    for frame_idx in range(result.shape[0]):
-        frame_mean = torch.mean(result[frame_idx])
-        assert torch.abs(frame_mean) < 1e-5
-
-
-# Tests for prepare_core
-def test_prepare_core_skip_preparation(sample_movie):
-    """Test prepare_core with skip_movie_preparation=True."""
-    result = prepare_core(
-        sample_movie,
-        gain_map=None,
-        dark_map=None,
-        gain_flip=0,
-        gain_rot=0,
-        multiply_gain=True,
-        skip_movie_preparation=True,
-    )
-
-    # Should return original movie unchanged
-    assert torch.allclose(result, sample_movie)
-
-
-def test_prepare_core_with_preparation(sample_movie, sample_gain_map):
-    """Test prepare_core with skip_movie_preparation=False."""
-    result = prepare_core(
-        sample_movie,
-        gain_map=sample_gain_map,
-        dark_map=None,
-        gain_flip=0,
-        gain_rot=0,
-        multiply_gain=True,
-        skip_movie_preparation=False,
-    )
-
-    # Should have same shape
-    assert result.shape == sample_movie.shape
-
-    # Should have mean zero frames (from prepare_movie)
     for frame_idx in range(result.shape[0]):
         frame_mean = torch.mean(result[frame_idx])
         assert torch.abs(frame_mean) < 1e-5

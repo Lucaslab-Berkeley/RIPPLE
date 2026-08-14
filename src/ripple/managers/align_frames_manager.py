@@ -75,6 +75,9 @@ class AlignFramesManager(BaseModelRIPPLE):
     ) -> torch.Tensor:
         """Load and prepare the movie (gain/dark correction, mask, mean-zero).
 
+        Honors ``alignment_config.skip_movie_preparation``. When True, the loaded movie
+        is returned as-is with no gain/dark/mask/mean-zero correction applied.
+
         Parameters
         ----------
         movie: torch.Tensor | None
@@ -105,12 +108,14 @@ class AlignFramesManager(BaseModelRIPPLE):
             mask,
             initial_deformation_field=None,
         )
-        return self.movie_config.prepare(
+        return manager_utils.prepare_movie_if_needed(
+            self.movie_config,
+            self.alignment_config,
             movie,
             gain_map,
             dark_map,
-            mask=mask,
-            device=self.computational_config.gpu_device,
+            mask,
+            self.computational_config.gpu_device,
         )
 
     def estimate_motion(

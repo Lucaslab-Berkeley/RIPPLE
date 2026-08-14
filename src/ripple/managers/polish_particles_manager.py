@@ -141,14 +141,15 @@ class PolishParticlesManager(BaseModelRIPPLE):
             deformation_field,
         )
 
-        if not self.alignment_config.skip_movie_preparation:
-            movie = self.movie_config.prepare(
-                movie,
-                gain_map,
-                dark_map,
-                mask=mask,
-                device=self.computational_config.gpu_device,
-            )
+        movie = manager_utils.prepare_movie_if_needed(
+            self.movie_config,
+            self.alignment_config,
+            movie,
+            gain_map,
+            dark_map,
+            mask,
+            self.computational_config.gpu_device,
+        )
         core_kwargs = self.setup_backend_kwargs(movie, deformation_field)
         trajectory: OptimizationTracker
 
