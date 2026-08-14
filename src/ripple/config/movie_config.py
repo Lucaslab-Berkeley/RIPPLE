@@ -3,7 +3,7 @@
 import torch
 from pydantic import field_validator
 
-from ripple.core.prepare_movie import prepare_movie
+from ripple.core.prepare_movie import DEFAULT_PREP_CHUNK_SIZE, prepare_movie
 from ripple.utils.custom_types import BaseModelRIPPLE
 from ripple.utils.data_io import load_tensor_from_path, render_eer_to_tensor
 
@@ -79,6 +79,8 @@ class MovieConfig(BaseModelRIPPLE):
         movie: torch.Tensor,
         gain_map: torch.Tensor | None = None,
         dark_map: torch.Tensor | None = None,
+        device: torch.device | str | None = None,
+        chunk_size: int = DEFAULT_PREP_CHUNK_SIZE,
     ) -> torch.Tensor:
         """Apply gain, dark, hot-pixel, and mean-zero corrections to a movie.
 
@@ -90,6 +92,13 @@ class MovieConfig(BaseModelRIPPLE):
             Gain map tensor. If None, gain correction is skipped.
         dark_map : torch.Tensor | None
             Dark map tensor. If None, dark correction is skipped.
+        device : torch.device | str | None
+            Device to prepare the movie on. If None, uses `movie`'s current device.
+            Frames are transferred and corrected `chunk_size` at a time so a large (e.g.
+            CPU-resident) raw movie is never fully duplicated on `device`
+            mid-preparation.
+        chunk_size : int
+            Number of frames to transfer/correct at a time.
 
         Returns
         -------
@@ -97,7 +106,14 @@ class MovieConfig(BaseModelRIPPLE):
             Corrected movie tensor.
         """
         return prepare_movie(
-            movie, gain_map, dark_map, self.gain_flip, self.gain_rot, self.multiply_gain
+            movie,
+            gain_map,
+            dark_map,
+            self.gain_flip,
+            self.gain_rot,
+            self.multiply_gain,
+            device=device,
+            chunk_size=chunk_size,
         )
 
     @property

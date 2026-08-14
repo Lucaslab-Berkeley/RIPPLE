@@ -1,6 +1,15 @@
 """Functions for preparing a movie for alignment."""
 
 import torch
+import torch.nn.functional as F
+
+# Number of frames transferred to `device` and corrected at a time
+DEFAULT_PREP_CHUNK_SIZE = 8
+
+# 3x3 kernel that averages the 8-neighborhood of a pixel (center excluded)
+_NEIGHBOR_AVERAGE_KERNEL = (
+    torch.tensor([[1.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0]]) / 8.0
+)
 
 
 # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
@@ -11,9 +20,10 @@ def prepare_movie(
     gain_flip: int,
     gain_rot: int,
     multiply_gain: bool = True,
+    device: torch.device | str | None = None,
+    chunk_size: int = DEFAULT_PREP_CHUNK_SIZE,
 ) -> torch.Tensor:
-    """
-    Prepare the movie for alignment.
+    """Prepare the movie for alignment.
 
     Parameters
     ----------
@@ -32,18 +42,37 @@ def prepare_movie(
     multiply_gain: bool = True
         Whether to multiply the movie by the gain map or divide the movie by the
         gain map.
+    device: torch.device | str | None
+        Device to prepare the movie on. If None, uses `movie`'s current device.
+    chunk_size: int
+        Number of frames to transfer/correct at a time.
 
     Returns
     -------
     torch.Tensor
     The prepared movie.
     """
-    movie = apply_gain(movie, gain_map, gain_flip, gain_rot, multiply_gain)
-    movie = apply_dark(movie, dark_map)
-    movie = remove_hot_pixels(movie)
-    movie = set_frames_mean_zero(movie)
+    target_device = torch.device(device) if device is not None else movie.device
 
-    return movie
+    n_frames = movie.shape[0]
+    chunk_size = max(1, min(chunk_size, n_frames))
+    prepared = torch.empty(movie.shape, dtype=torch.float32, device=target_device)
+
+    # Iterate over each chunk of frames
+    for start in range(0, n_frames, chunk_size):
+        end = min(start + chunk_size, n_frames)
+        chunk = movie[start:end].to(device=target_device, dtype=torch.float32)
+        chunk = apply_gain(chunk, gain_map, gain_flip, gain_rot, multiply_gain)
+        chunk = apply_dark(chunk, dark_map)
+        chunk = remove_hot_pixels(chunk)
+        prepared[start:end] = chunk
+
+    # `prepared` is a buffer we own outright (not caller-supplied), so it is
+    # safe to finish it off in place rather than allocating one more full copy.
+    frame_means = torch.mean(prepared, dim=(1, 2), keepdim=True)
+    prepared -= frame_means
+
+    return prepared
 
 
 def apply_gain(
@@ -86,6 +115,8 @@ def apply_gain(
     if gain_map is None:
         return movie
 
+    gain_map = gain_map.to(device=movie.device, dtype=movie.dtype)
+
     # Apply transformations to gain map
     if gain_flip == 1:
         gain_map = gain_map.flip(0)  # flipY
@@ -121,17 +152,15 @@ def apply_dark(
     """
     if dark_map is None:
         return movie
-    return movie - dark_map
+    return movie - dark_map.to(device=movie.device, dtype=movie.dtype)
 
 
-# pylint: disable=too-many-locals,too-many-nested-blocks
 def remove_hot_pixels(movie: torch.Tensor, threshold: float = 10.0) -> torch.Tensor:
-    """
-    Remove hot pixels from movie frames.
+    """Remove hot pixels from movie frames.
 
-    Does so by replacing pixels that are more than
-    `threshold` standard deviations above/below the mean
-    with a random adjacent pixel value.
+    Does so by replacing pixels that are more than `threshold` standard deviations
+    above/below the mean (computed from the central 50% of each frame) with the average
+    of their 8 neighboring pixels. Replacement vectorized into a single conv2d call.
 
     Args:
         movie: torch.Tensor
@@ -144,83 +173,26 @@ def remove_hot_pixels(movie: torch.Tensor, threshold: float = 10.0) -> torch.Ten
         torch.Tensor
         The movie with hot pixels replaced.
     """
-    print(f"Removing hot pixels with threshold {threshold} standard deviations...")
+    _, height, width = movie.shape
 
-    movie_corrected = movie.clone()
-    n_frames, height, width = movie.shape
+    # Compute mean/std from the central 50% of each frame
+    central = movie[:, height // 4 : 3 * height // 4, width // 4 : 3 * width // 4]
+    frame_mean = torch.mean(central, dim=(1, 2), keepdim=True)
+    frame_std = torch.std(central, dim=(1, 2), keepdim=True)
 
-    for frame_idx in range(n_frames):
-        frame = movie_corrected[frame_idx]
+    hot_pixel_mask = (movie - frame_mean).abs() > threshold * frame_std
+    if not bool(hot_pixel_mask.any()):
+        return movie
 
-        # Calculate mean and std for this frame
-        # just to this for middle 50% of image
-        frame_mean = torch.mean(
-            frame[height // 4 : 3 * height // 4, width // 4 : 3 * width // 4]
-        )
-        frame_std = torch.std(
-            frame[height // 4 : 3 * height // 4, width // 4 : 3 * width // 4]
-        )
+    kernel = _NEIGHBOR_AVERAGE_KERNEL.to(device=movie.device, dtype=movie.dtype)
+    neighbor_average = F.conv2d(
+        movie.unsqueeze(1), kernel.view(1, 1, 3, 3), padding=1
+    ).squeeze(1)
 
-        # Find hot pixels (pixels above OR below threshold * std from mean)
-        hot_pixel_mask = (frame > (frame_mean + threshold * frame_std)) | (
-            frame < (frame_mean - threshold * frame_std)
-        )
-        hot_pixel_coords = torch.where(hot_pixel_mask)
-
-        if len(hot_pixel_coords[0]) > 0:
-            print(f"  Frame {frame_idx}: Found {len(hot_pixel_coords[0])} hot pixels")
-
-            # Replace each hot pixel with a random adjacent pixel
-            for y, x in zip(hot_pixel_coords[0], hot_pixel_coords[1], strict=False):
-                # Define the 8-connected neighborhood bounds
-                y_min = max(0, y - 1)
-                y_max = min(height - 1, y + 1)
-                x_min = max(0, x - 1)
-                x_max = min(width - 1, x + 1)
-
-                # Get adjacent pixels (excluding the hot pixel itself)
-                adjacent_pixels = []
-                for adj_y in range(y_min, y_max + 1):
-                    for adj_x in range(x_min, x_max + 1):
-                        if adj_y != y or adj_x != x:  # Exclude the hot pixel itself
-                            adjacent_pixels.append(frame[adj_y, adj_x])
-
-                # Replace with random adjacent pixel value
-                if adjacent_pixels:
-                    replacement_value = torch.randint(0, len(adjacent_pixels), (1,))
-                    movie_corrected[frame_idx, y, x] = replacement_value
-
-    return movie_corrected
+    return torch.where(hot_pixel_mask, neighbor_average, movie)
 
 
-def set_frames_mean_zero(movie: torch.Tensor) -> torch.Tensor:
-    """
-    Set each frame in the movie to have mean zero.
-
-    Parameters
-    ----------
-    movie: torch.Tensor
-        The movie to set the frames mean to zero.
-
-    Returns
-    -------
-    torch.Tensor
-        The movie with each frame having mean zero.
-    """
-    print("Setting each frame to mean zero (vectorized)...")
-
-    # Calculate mean for each frame along the spatial dimensions (axis=(1,2))
-    frame_means = torch.mean(movie, axis=(1, 2), keepdim=True)
-
-    # Subtract the mean from each frame using broadcasting
-    movie_mean_zero = movie - frame_means
-
-    n_frames = movie.shape[0]
-    print(f"  Completed mean zero correction for {n_frames} frames")
-
-    return movie_mean_zero
-
-
+# pylint: disable=too-many-arguments,too-many-positional-arguments
 def prepare_core(
     movie: torch.Tensor,
     gain_map: torch.Tensor | None,
@@ -229,6 +201,8 @@ def prepare_core(
     gain_rot: int,
     multiply_gain: bool,
     skip_movie_preparation: bool,
+    device: torch.device | str | None = None,
+    chunk_size: int = DEFAULT_PREP_CHUNK_SIZE,
 ) -> torch.Tensor:
     """
     Prepare the movie for core processing functions.
@@ -250,6 +224,10 @@ def prepare_core(
         gain map.
     skip_movie_preparation: bool
         Whether to skip the movie preparation step.
+    device: torch.device | str | None
+        Device to prepare the movie on. If None, uses `movie`'s current device.
+    chunk_size: int
+        Number of frames to transfer/correct at a time.
 
     Returns
     -------
@@ -258,7 +236,14 @@ def prepare_core(
     """
     if not skip_movie_preparation:
         movie_prepared = prepare_movie(
-            movie, gain_map, dark_map, gain_flip, gain_rot, multiply_gain
+            movie,
+            gain_map,
+            dark_map,
+            gain_flip,
+            gain_rot,
+            multiply_gain,
+            device=device,
+            chunk_size=chunk_size,
         )
     else:
         movie_prepared = movie

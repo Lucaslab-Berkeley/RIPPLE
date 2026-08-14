@@ -12,7 +12,6 @@ from ripple.core.prepare_movie import (
     prepare_core,
     prepare_movie,
     remove_hot_pixels,
-    set_frames_mean_zero,
 )
 
 
@@ -133,38 +132,6 @@ def test_apply_dark_basic(sample_movie, sample_dark_map):
     result = apply_dark(sample_movie, sample_dark_map)
     expected = sample_movie - sample_dark_map
     assert torch.allclose(result, expected)
-
-
-# Tests for set_frames_mean_zero
-def test_set_frames_mean_zero(sample_movie):
-    """Test that set_frames_mean_zero makes each frame have mean zero."""
-    result = set_frames_mean_zero(sample_movie)
-
-    # Check that result has same shape
-    assert result.shape == sample_movie.shape
-
-    # Check that each frame has mean approximately zero
-    for frame_idx in range(result.shape[0]):
-        frame_mean = torch.mean(result[frame_idx])
-        assert torch.abs(frame_mean) < 1e-5, (
-            f"Frame {frame_idx} mean is not zero: {frame_mean}"
-        )
-
-
-def test_set_frames_mean_zero_preserves_differences(sample_movie):
-    """Test that set_frames_mean_zero preserves relative differences within frames."""
-    result = set_frames_mean_zero(sample_movie)
-
-    # The difference between any two pixels in a frame should be preserved
-    # (just shifted by a constant)
-    for frame_idx in range(sample_movie.shape[0]):
-        original_frame = sample_movie[frame_idx]
-        result_frame = result[frame_idx]
-
-        # Difference between first two pixels should be the same
-        diff_original = original_frame[0, 0] - original_frame[0, 1]
-        diff_result = result_frame[0, 0] - result_frame[0, 1]
-        assert torch.allclose(diff_original, diff_result)
 
 
 # Tests for remove_hot_pixels

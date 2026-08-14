@@ -62,12 +62,11 @@ def load_missing_tensors(
     """
     device = computational_config.gpu_device
 
+    # NOTE: the movie is deliberately *not* moved to `device` here. A raw movie can be
+    # far larger than GPU memory. `MovieConfig.prepare` / `prepare_movie` transfers it
+    # to `device` in frame chunks instead.
     if movie is None:
         movie = movie_config.movie
-        if movie is not None:
-            movie = movie.to(device)
-    else:
-        movie = movie.to(device)
 
     if gain_map is None:
         gain_map = movie_config.gain

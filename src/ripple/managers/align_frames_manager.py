@@ -97,7 +97,9 @@ class AlignFramesManager(BaseModelRIPPLE):
             dark_map,
             initial_deformation_field=None,
         )
-        return self.movie_config.prepare(movie, gain_map, dark_map)
+        return self.movie_config.prepare(
+            movie, gain_map, dark_map, device=self.computational_config.gpu_device
+        )
 
     def estimate_motion(
         self,
