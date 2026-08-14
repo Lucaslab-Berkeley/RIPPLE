@@ -23,6 +23,16 @@ if TYPE_CHECKING:
     )
 
 
+# Tuple of (movie, gain_map, dark_map, mask, initial_deformation_field)
+LoadedTensors = tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor | None,
+    DeformationField | None,
+]
+
+
 # pylint: disable=too-many-arguments,too-many-positional-arguments
 def load_missing_tensors(
     computational_config: "ComputationalConfig",
@@ -31,8 +41,9 @@ def load_missing_tensors(
     movie: torch.Tensor | None = None,
     gain_map: torch.Tensor | None = None,
     dark_map: torch.Tensor | None = None,
+    mask: torch.Tensor | None = None,
     initial_deformation_field: DeformationField | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, DeformationField | None]:
+) -> LoadedTensors:
     """Load only the tensors that are not provided as arguments.
 
     Parameters
@@ -40,7 +51,7 @@ def load_missing_tensors(
     computational_config: ComputationalConfig
         Computational configuration containing device information.
     movie_config: MovieConfig
-        Movie configuration containing movie, gain, and dark map.
+        Movie configuration containing movie, gain, dark map, and mask.
     alignment_config: BaseAlignmentConfig
         Alignment configuration containing deformation field.
     movie: Optional[torch.Tensor]
@@ -49,6 +60,9 @@ def load_missing_tensors(
         Gain map tensor. If None, will be loaded from config.
     dark_map: Optional[torch.Tensor]
         Dark map tensor. If None, will be loaded from config.
+    mask: Optional[torch.Tensor]
+        Mask tensor with shape (height, width). If None, will be loaded from
+        config (or remain None if no ``mask_path`` is configured).
     initial_deformation_field: DeformationField | None
         Starting deformation field. If None, falls back to
         ``alignment_config.initial_deformation_field`` (loaded from disk, or
@@ -56,15 +70,16 @@ def load_missing_tensors(
 
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor, torch.Tensor, DeformationField | None]
-        Tuple of (movie, gain_map, dark_map, initial_deformation_field), with
+    LoadedTensors
+        Tuple of (movie, gain_map, dark_map, mask, initial_deformation_field), with
         missing ones loaded from config.
     """
     device = computational_config.gpu_device
 
     # NOTE: the movie is deliberately *not* moved to `device` here. A raw movie can be
     # far larger than GPU memory. `MovieConfig.prepare` / `prepare_movie` transfers it
-    # to `device` in frame chunks instead.
+    # to `device` in frame chunks instead. When `movie` is supplied directly, no disk
+    # read via `movie_config.movie` occurs at all.
     if movie is None:
         movie = movie_config.movie
 
@@ -82,6 +97,13 @@ def load_missing_tensors(
     else:
         dark_map = dark_map.to(device)
 
+    if mask is None:
+        mask = movie_config.mask
+        if mask is not None:
+            mask = mask.to(device)
+    else:
+        mask = mask.to(device)
+
     if initial_deformation_field is None:
         initial_deformation_field = alignment_config.initial_deformation_field
         if initial_deformation_field is not None:
@@ -89,7 +111,7 @@ def load_missing_tensors(
     else:
         initial_deformation_field = initial_deformation_field.to(device)
 
-    return movie, gain_map, dark_map, initial_deformation_field
+    return movie, gain_map, dark_map, mask, initial_deformation_field
 
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments

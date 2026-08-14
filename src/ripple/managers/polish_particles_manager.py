@@ -91,6 +91,7 @@ class PolishParticlesManager(BaseModelRIPPLE):
         movie: torch.Tensor | None = None,
         gain_map: torch.Tensor | None = None,
         dark_map: torch.Tensor | None = None,
+        mask: torch.Tensor | None = None,
         deformation_field: torch.Tensor | None = None,
         movie_extract: bool = True,
         particle_batch_size: int = 100,
@@ -109,6 +110,9 @@ class PolishParticlesManager(BaseModelRIPPLE):
             Gain map tensor. If provided, will not be loaded from config.
         dark_map: Optional[torch.Tensor]
             Dark map tensor. If provided, will not be loaded from config.
+        mask: Optional[torch.Tensor]
+            Mask with shape (height, width) multiplied uniformly into every frame. If
+            provided, will not be loaded from config.
         deformation_field: Optional[torch.Tensor]
             Deformation field tensor. If provided, will not be loaded from config.
         movie_extract: bool
@@ -124,6 +128,7 @@ class PolishParticlesManager(BaseModelRIPPLE):
             movie,
             gain_map,
             dark_map,
+            mask,
             deformation_field,
         ) = manager_utils.load_missing_tensors(
             self.computational_config,
@@ -132,12 +137,17 @@ class PolishParticlesManager(BaseModelRIPPLE):
             movie,
             gain_map,
             dark_map,
+            mask,
             deformation_field,
         )
 
         if not self.alignment_config.skip_movie_preparation:
             movie = self.movie_config.prepare(
-                movie, gain_map, dark_map, device=self.computational_config.gpu_device
+                movie,
+                gain_map,
+                dark_map,
+                mask=mask,
+                device=self.computational_config.gpu_device,
             )
         core_kwargs = self.setup_backend_kwargs(movie, deformation_field)
         trajectory: OptimizationTracker

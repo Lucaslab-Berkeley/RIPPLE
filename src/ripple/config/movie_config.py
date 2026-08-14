@@ -30,6 +30,12 @@ class MovieConfig(BaseModelRIPPLE):
         Path to the gain map file. If None, the gain map will be initialized to zero.
     dark_path: Optional[str]
         Path to the dark map file. If None, the dark map will be initialized to zero.
+    mask_path: Optional[str]
+        Path to a (height, width) mask file applied uniformly to every frame during
+        preparation. If None (default), no masking is applied.
+    mask_fill_noise: bool
+        If True (and mask_path is set), pixels where the mask is 0 are replaced with
+        per-frame Poisson noise instead of being zeroed out. Default is False.
     gain_flip: int
         Flip the gain map.
         0: no flip
@@ -46,7 +52,7 @@ class MovieConfig(BaseModelRIPPLE):
         gain map. Default is True.
     """
 
-    movie_path: str
+    movie_path: str | None = None
     pixel_size: float
     fluence: float
     fluence_per_frame: float
@@ -57,6 +63,8 @@ class MovieConfig(BaseModelRIPPLE):
     gain_rot: int = 0
     multiply_gain: bool = True
     dark_path: str | None = None
+    mask_path: str | None = None
+    mask_fill_noise: bool = False
 
     @field_validator("gain_flip")  # type: ignore[misc]
     @classmethod
@@ -79,10 +87,11 @@ class MovieConfig(BaseModelRIPPLE):
         movie: torch.Tensor,
         gain_map: torch.Tensor | None = None,
         dark_map: torch.Tensor | None = None,
+        mask: torch.Tensor | None = None,
         device: torch.device | str | None = None,
         chunk_size: int = DEFAULT_PREP_CHUNK_SIZE,
     ) -> torch.Tensor:
-        """Apply gain, dark, hot-pixel, and mean-zero corrections to a movie.
+        """Apply gain, dark, hot-pixel, mask, and mean-zero corrections to a movie.
 
         Parameters
         ----------
@@ -92,6 +101,11 @@ class MovieConfig(BaseModelRIPPLE):
             Gain map tensor. If None, gain correction is skipped.
         dark_map : torch.Tensor | None
             Dark map tensor. If None, dark correction is skipped.
+        mask : torch.Tensor | None
+            Mask with shape (height, width) applied uniformly to every frame. If None,
+            no masking is applied. If ``self.mask_fill_noise`` is True, then masked out
+            pixels (``mask == 0``) are replaced with per-frame Poisson. Otherwise, those
+            pixel locations are zeroed.
         device : torch.device | str | None
             Device to prepare the movie on. If None, uses `movie`'s current device.
             Frames are transferred and corrected `chunk_size` at a time so a large (e.g.
@@ -112,6 +126,8 @@ class MovieConfig(BaseModelRIPPLE):
             self.gain_flip,
             self.gain_rot,
             self.multiply_gain,
+            mask=mask,
+            mask_fill_noise=self.mask_fill_noise,
             device=device,
             chunk_size=chunk_size,
         )
@@ -133,6 +149,13 @@ class MovieConfig(BaseModelRIPPLE):
         if self.gain_path is None:
             return None
         return load_tensor_from_path(self.gain_path, expected_ndim=2)
+
+    @property
+    def mask(self) -> torch.Tensor | None:
+        """Get the mask tensor."""
+        if self.mask_path is None:
+            return None
+        return load_tensor_from_path(self.mask_path, expected_ndim=2)
 
     @property
     def dark(self) -> torch.Tensor:

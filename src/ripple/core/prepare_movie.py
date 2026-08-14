@@ -20,6 +20,8 @@ def prepare_movie(
     gain_flip: int,
     gain_rot: int,
     multiply_gain: bool = True,
+    mask: torch.Tensor | None = None,
+    mask_fill_noise: bool = False,
     device: torch.device | str | None = None,
     chunk_size: int = DEFAULT_PREP_CHUNK_SIZE,
 ) -> torch.Tensor:
@@ -42,6 +44,13 @@ def prepare_movie(
     multiply_gain: bool = True
         Whether to multiply the movie by the gain map or divide the movie by the
         gain map.
+    mask: torch.Tensor | None
+        Mask with shape (height, width) applied uniformly to every frame (e.g. a beam
+        aperture or defect mask). If None, no masking is applied and `mask_fill_noise`
+        has no effect.
+    mask_fill_noise: bool
+        If True (and `mask` is provided), pixels where `mask == 0` are replaced with
+        per-frame Poisson noise instead of being zeroed out. Ignored if `mask` is None.
     device: torch.device | str | None
         Device to prepare the movie on. If None, uses `movie`'s current device.
     chunk_size: int
@@ -65,6 +74,7 @@ def prepare_movie(
         chunk = apply_gain(chunk, gain_map, gain_flip, gain_rot, multiply_gain)
         chunk = apply_dark(chunk, dark_map)
         chunk = remove_hot_pixels(chunk)
+        chunk = apply_mask(chunk, mask, fill_noise=mask_fill_noise)
         prepared[start:end] = chunk
 
     # `prepared` is a buffer we own outright (not caller-supplied), so it is
@@ -192,6 +202,59 @@ def remove_hot_pixels(movie: torch.Tensor, threshold: float = 10.0) -> torch.Ten
     return torch.where(hot_pixel_mask, neighbor_average, movie)
 
 
+def apply_mask(
+    movie: torch.Tensor,
+    mask: torch.Tensor | None,
+    fill_noise: bool = False,
+) -> torch.Tensor:
+    """Apply a (height, width) mask uniformly to every frame of the movie.
+
+    Parameters
+    ----------
+    movie : torch.Tensor
+        Movie tensor with shape (n_frames, height, width).
+    mask : torch.Tensor | None
+        Mask with shape (height, width) to apply to every frame. If None,
+        returns the movie unchanged (`fill_noise` has no effect without a mask).
+    fill_noise : bool
+        If True, replace pixels where `mask == 0` with per-frame Poisson noise
+        instead of multiplying the movie by `mask`. Ignored if `mask` is None.
+
+    Returns
+    -------
+    torch.Tensor
+        The masked (or noise-filled) movie, or the original movie if mask is None.
+
+    Raises
+    ------
+    ValueError
+        If mask's shape does not match the movie's per-frame (height, width) shape.
+    """
+    if mask is None:
+        return movie
+    if mask.shape != movie.shape[-2:]:
+        raise ValueError(
+            f"mask shape {tuple(mask.shape)} does not match movie's per-frame "
+            f"shape {tuple(movie.shape[-2:])}"
+        )
+    mask = mask.to(device=movie.device, dtype=movie.dtype)
+
+    if not fill_noise:
+        return movie * mask
+    return _fill_masked_noise(movie, mask)
+
+
+def _fill_masked_noise(movie: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Replace pixels where `mask == 0` with per-frame Poisson noise."""
+    _, height, width = movie.shape
+    central = movie[:, height // 4 : 3 * height // 4, width // 4 : 3 * width // 4]
+    frame_lambda = torch.clamp(torch.mean(central, dim=(1, 2), keepdim=True), min=1.0)
+    noise = torch.poisson(frame_lambda.expand_as(movie))
+
+    outside_mask = (mask == 0).unsqueeze(0).expand_as(movie)
+    return torch.where(outside_mask, noise, movie)
+
+
 # pylint: disable=too-many-arguments,too-many-positional-arguments
 def prepare_core(
     movie: torch.Tensor,
@@ -201,6 +264,8 @@ def prepare_core(
     gain_rot: int,
     multiply_gain: bool,
     skip_movie_preparation: bool,
+    mask: torch.Tensor | None = None,
+    mask_fill_noise: bool = False,
     device: torch.device | str | None = None,
     chunk_size: int = DEFAULT_PREP_CHUNK_SIZE,
 ) -> torch.Tensor:
@@ -224,6 +289,12 @@ def prepare_core(
         gain map.
     skip_movie_preparation: bool
         Whether to skip the movie preparation step.
+    mask: torch.Tensor | None
+        Mask with shape (height, width) applied uniformly to every frame. If None, no
+        masking is applied and `mask_fill_noise` has no effect.
+    mask_fill_noise: bool
+        If True (and `mask` is provided), pixels where `mask == 0` are replaced with
+        per-frame Poisson noise instead of being zeroed out.
     device: torch.device | str | None
         Device to prepare the movie on. If None, uses `movie`'s current device.
     chunk_size: int
@@ -242,6 +313,8 @@ def prepare_core(
             gain_flip,
             gain_rot,
             multiply_gain,
+            mask=mask,
+            mask_fill_noise=mask_fill_noise,
             device=device,
             chunk_size=chunk_size,
         )

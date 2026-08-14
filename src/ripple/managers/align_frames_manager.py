@@ -71,34 +71,46 @@ class AlignFramesManager(BaseModelRIPPLE):
         movie: torch.Tensor | None = None,
         gain_map: torch.Tensor | None = None,
         dark_map: torch.Tensor | None = None,
+        mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Load and prepare the movie (gain/dark correction, mean-zero).
+        """Load and prepare the movie (gain/dark correction, mask, mean-zero).
 
         Parameters
         ----------
         movie: torch.Tensor | None
-            Raw movie tensor. If None, loaded from ``movie_config``.
+            Raw movie tensor. If provided, it is used as-is and never read from
+            disk (``movie_config.movie_path`` is ignored). If None, loaded from
+            ``movie_config``.
         gain_map: torch.Tensor | None
             Gain map tensor. If None, loaded from ``movie_config``.
         dark_map: torch.Tensor | None
             Dark map tensor. If None, loaded from ``movie_config``.
+        mask: torch.Tensor | None
+            Mask with shape (height, width) multiplied uniformly into every frame. If
+            None, loaded from ``movie_config`` (or left unset if no ``mask_path`` is
+            configured).
 
         Returns
         -------
         torch.Tensor
             Prepared movie tensor ready for motion estimation.
         """
-        movie, gain_map, dark_map, _ = manager_utils.load_missing_tensors(
+        movie, gain_map, dark_map, mask, _ = manager_utils.load_missing_tensors(
             self.computational_config,
             self.movie_config,
             self.alignment_config,
             movie,
             gain_map,
             dark_map,
+            mask,
             initial_deformation_field=None,
         )
         return self.movie_config.prepare(
-            movie, gain_map, dark_map, device=self.computational_config.gpu_device
+            movie,
+            gain_map,
+            dark_map,
+            mask=mask,
+            device=self.computational_config.gpu_device,
         )
 
     def estimate_motion(
