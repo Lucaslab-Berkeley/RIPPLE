@@ -115,7 +115,7 @@ class AlignFramesManager(BaseModelRIPPLE):
             gain_map,
             dark_map,
             mask,
-            self.computational_config.gpu_device,
+            self.computational_config.movie_storage_device,
         )
 
     def estimate_motion(
@@ -146,7 +146,6 @@ class AlignFramesManager(BaseModelRIPPLE):
             Estimated deformation field and optimization history.
         """
         device = self.computational_config.gpu_device
-        movie = movie.to(device)
 
         if self.alignment_config.use_xc_prepass and initial_deformation_field is None:
             initial_deformation_field = estimate_global_motion(
@@ -154,6 +153,7 @@ class AlignFramesManager(BaseModelRIPPLE):
                 pixel_spacing=self.movie_config.pixel_size,
                 fourier_filter=self.alignment_config.as_fourier_filter_config,
                 device=device,
+                downsample_factor=self.alignment_config.xc_prepass_downsample_factor,
             )
 
         kwargs = self._setup_estimation_kwargs(movie, initial_deformation_field)
