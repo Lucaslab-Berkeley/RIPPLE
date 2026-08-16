@@ -9,11 +9,13 @@
 # --- Computing resources ---
 computational_config:
   gpu_id: 0  # (required) Can be an integer (0), a string like "cuda:0", or "cpu". Single GPU execution only.
+  keep_movie_on_cpu: false  # (optional, default false) Keep the prepared movie on CPU RAM; stream frames/chunks to GPU as needed.
 
 # --- Input movie plus metadata ---
 movie_config:
   movie_path: "movies/my_movie.eer"   # (required)  Path to the movie file (.mrc, .tif, or .eer)
-  pixel_size: 0.936                   # (required)  Pixel size in Angstroms per pixel
+  pixel_size: 0.936                   # (required)  Pixel size in Angstroms per pixel (native/super-resolution pixel size, not the final output pixel size)
+  super_resolution_factor: 1          # (optional, default 1)     Integer factor relating pixel_size to the desired output pixel size: output_pixel_size = pixel_size * super_resolution_factor. E.g. 2 for a movie collected at 2x the desired final pixel size.
   fluence: 54.5                       # (required)  Total fluence in electrons per Angstrom^2
   fluence_per_frame: 1.0              # (required)  Fluence per frame in electrons per Angstrom^2/frame
   pre_exposure: 0.0                   #             Pre-exposure time in seconds (default: 0.0)       NOTE - Is this correct units?

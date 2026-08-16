@@ -5,8 +5,40 @@ from torch_fourier_filter.dose_weight import (
     dose_weight_frame_chunk,
     dose_weight_normalization_grid,
 )
+from torch_fourier_rescale import fourier_rescale_2d
 
 DEFAULT_DOSE_WEIGHT_CHUNK_SIZE = 8
+
+
+def fourier_crop_movie(
+    movie: torch.Tensor,
+    pixel_size: float,
+    factor: int,
+) -> tuple[torch.Tensor, float]:
+    """Fourier-crop every frame of a movie down by an integer factor.
+
+    Parameters
+    ----------
+    movie: torch.Tensor
+        Movie tensor (t, h, w) to crop, at `pixel_size` Angstroms/pixel.
+    pixel_size: float
+        Pixel size of `movie`, in Angstroms per pixel.
+    factor: int
+        Integer factor by which to reduce sampling. 1 is a no-op (returns
+        `movie`, `pixel_size` unchanged).
+
+    Returns
+    -------
+    tuple[torch.Tensor, float]
+        The Fourier-cropped movie and its new pixel size (`pixel_size * factor`).
+    """
+    if factor == 1:
+        return movie, pixel_size
+
+    cropped_movie, new_spacing = fourier_rescale_2d(
+        movie, source_spacing=pixel_size, target_spacing=pixel_size * factor
+    )
+    return cropped_movie, new_spacing[0]
 
 
 def generate_dose_weighted_image(

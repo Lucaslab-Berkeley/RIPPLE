@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import torch
 from torch_motion_correction import DeformationField
 
-from ripple.core import generate_dose_weighted_image, sum_movie
+from ripple.core import fourier_crop_movie, generate_dose_weighted_image, sum_movie
 from ripple.utils.data_io import (
     write_mrc_from_tensor,
     write_trajectory_to_csv,
@@ -151,7 +151,12 @@ def prepare_movie_if_needed(
     if alignment_config.skip_movie_preparation:
         return movie
     return movie_config.prepare(
-        movie, gain_map, dark_map, mask=mask, device=device, storage_device=storage_device
+        movie,
+        gain_map,
+        dark_map,
+        mask=mask,
+        device=device,
+        storage_device=storage_device,
     )
 
 
@@ -173,9 +178,10 @@ def save_results(
     output_config: OutputConfig
         Output configuration containing output paths.
     movie_config: MovieConfig
-        Movie configuration containing pixel size, pre-exposure, fluence, and voltage.
+        Movie configuration containing pixel size, pre-exposure, fluence, voltage, and
+        super-resolution settings.
     corrected_movie: torch.Tensor
-        The corrected movie.
+        The corrected movie, at `movie_config.pixel_size` (native/super-resolution).
     updated_deformation_field: torch.Tensor
         The updated deformation field.
     movie_prepared: torch.Tensor
@@ -191,11 +197,24 @@ def save_results(
     None
         None.
     """
+    summation_movie = corrected_movie
+    summation_pixel_size = movie_config.pixel_size
+    needs_summation = (
+        output_config.dw_sum_output_path is not None
+        or output_config.non_dw_sum_output_path is not None
+    )
+    if needs_summation and movie_config.super_resolution_factor > 1:
+        summation_movie, summation_pixel_size = fourier_crop_movie(
+            corrected_movie,
+            movie_config.pixel_size,
+            movie_config.super_resolution_factor,
+        )
+
     # Save DW sum is wanted
     if output_config.dw_sum_output_path is not None:
         dw_movie = generate_dose_weighted_image(
-            corrected_movie,
-            movie_config.pixel_size,
+            summation_movie,
+            summation_pixel_size,
             movie_config.pre_exposure,
             movie_config.fluence_per_frame,
             movie_config.voltage,
@@ -206,6 +225,7 @@ def save_results(
             data=dw_movie,
             mrc_path=output_config.dw_sum_output_path,
             overwrite=output_config.allow_file_overwrite,
+            pixel_size=summation_pixel_size,
         )
 
     # Save deformation field if wanted
@@ -218,12 +238,13 @@ def save_results(
 
     # Save non-dw sum movie if wanted
     if output_config.non_dw_sum_output_path is not None:
-        summed_movie = sum_movie(corrected_movie)
+        summed_movie = sum_movie(summation_movie)
         summed_movie = summed_movie.cpu()
         write_mrc_from_tensor(
             data=summed_movie,
             mrc_path=output_config.non_dw_sum_output_path,
             overwrite=output_config.allow_file_overwrite,
+            pixel_size=summation_pixel_size,
         )
 
     # Save aligned movie if wanted
@@ -233,6 +254,7 @@ def save_results(
             data=corrected_movie,
             mrc_path=output_config.motion_corrected_movie_output_path,
             overwrite=output_config.allow_file_overwrite,
+            pixel_size=movie_config.pixel_size,
         )
 
     # Save rendered, unaligned movie if wanted
@@ -242,6 +264,7 @@ def save_results(
             data=rendered_movie,
             mrc_path=output_config.rendered_movie_output_path,
             overwrite=output_config.allow_file_overwrite,
+            pixel_size=movie_config.pixel_size,
         )
 
     # Save loss trajectories if wanted

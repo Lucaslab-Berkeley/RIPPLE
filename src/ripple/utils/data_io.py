@@ -86,10 +86,12 @@ def write_mrc_from_numpy(
     mrc_path: str | os.PathLike | Path,
     mrc_header: dict | None = None,
     overwrite: bool = False,
+    pixel_size: float | None = None,
 ) -> None:
     """Writes a numpy array to an MRC file.
 
-    NOTE: Writing header information is not currently implemented.
+    NOTE: Writing header information, besides pixel/voxel size, is not currently
+    implemented.
 
     Parameters
     ----------
@@ -101,12 +103,17 @@ def write_mrc_from_numpy(
         Dictionary containing header information. Default is None.
     overwrite : bool
         Overwrite argument passed to mrcfile.new. Default is False.
+    pixel_size : float | None
+        Isotropic pixel size, in Angstroms, for  MRC header's voxel size fields.
+        If None (default), no voxel size is written.
     """
     if mrc_header is not None:
         raise NotImplementedError("Setting header info is not yet implemented.")
 
     with mrcfile.new(mrc_path, overwrite=overwrite) as mrc:
         mrc.set_data(data)
+        if pixel_size is not None:
+            mrc.voxel_size = pixel_size
 
 
 def write_mrc_from_tensor(
@@ -114,10 +121,12 @@ def write_mrc_from_tensor(
     mrc_path: str | os.PathLike | Path,
     mrc_header: dict | None = None,
     overwrite: bool = False,
+    pixel_size: float | None = None,
 ) -> None:
     """Writes a tensor array to an MRC file.
 
-    NOTE: Not currently implemented.
+    NOTE: Writing header information, besides pixel/voxel size, is not currently
+    implemented.
 
     Parameters
     ----------
@@ -129,8 +138,11 @@ def write_mrc_from_tensor(
         Dictionary containing header information. Default is None.
     overwrite : bool
         Overwrite argument passed to mrcfile.new. Default is False.
+    pixel_size : float | None
+        Isotropic pixel size, in Angstroms, for  MRC header's voxel size fields.
+        If None (default), no voxel size is written.
     """
-    write_mrc_from_numpy(data.numpy(), mrc_path, mrc_header, overwrite)
+    write_mrc_from_numpy(data.numpy(), mrc_path, mrc_header, overwrite, pixel_size)
 
 
 def load_array_from_path(

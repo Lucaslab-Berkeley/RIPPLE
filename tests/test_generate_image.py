@@ -9,6 +9,7 @@ from torch_fourier_filter.dose_weight import dose_weight_movie
 
 from ripple.core.generate_image import (
     dose_weight_memory_efficient,
+    fourier_crop_movie,
     generate_dose_weighted_image,
     sum_movie,
 )
@@ -231,3 +232,47 @@ def test_dose_weight_memory_efficient_is_differentiable(memory_strategy):
     assert movie.grad is not None
     assert torch.all(torch.isfinite(movie.grad))
     assert torch.any(movie.grad != 0)
+
+
+# ---------------------------------------------------------------------------
+# fourier_crop_movie
+# ---------------------------------------------------------------------------
+
+
+def test_fourier_crop_movie_factor_one_is_noop(sample_movie):
+    """factor=1 must return the exact same tensor object and unchanged pixel size."""
+    result, new_pixel_size = fourier_crop_movie(sample_movie, pixel_size=1.5, factor=1)
+
+    assert result is sample_movie
+    assert new_pixel_size == 1.5
+
+
+def test_fourier_crop_movie_halves_shape_and_doubles_pixel_size():
+    movie = torch.randn(5, 32, 32, dtype=torch.float32)
+
+    result, new_pixel_size = fourier_crop_movie(movie, pixel_size=0.4, factor=2)
+
+    assert result.shape == (5, 16, 16)
+    assert new_pixel_size == pytest.approx(0.8)
+
+
+def test_fourier_crop_movie_preserves_mean():
+    """Fourier cropping should preserve the DC component (per-frame mean)."""
+    movie = torch.randn(3, 32, 32, dtype=torch.float32) + 5.0
+
+    result, _ = fourier_crop_movie(movie, pixel_size=0.4, factor=2)
+
+    assert torch.allclose(
+        result.mean(dim=(-2, -1)), movie.mean(dim=(-2, -1)), atol=1e-3
+    )
+
+
+def test_fourier_crop_movie_all_frames_cropped_consistently():
+    """Every frame in the batch should be cropped with the same operation."""
+    frame = torch.randn(32, 32, dtype=torch.float32)
+    movie = frame.unsqueeze(0).repeat(4, 1, 1)
+
+    result, _ = fourier_crop_movie(movie, pixel_size=0.4, factor=2)
+
+    for i in range(1, 4):
+        assert torch.allclose(result[0], result[i])

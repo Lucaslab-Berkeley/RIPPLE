@@ -1,7 +1,7 @@
 """Serialization and validation of movie parameters for 2DTM."""
 
 import torch
-from pydantic import field_validator
+from pydantic import PositiveInt, field_validator
 
 from ripple.core.prepare_movie import DEFAULT_PREP_CHUNK_SIZE, prepare_movie
 from ripple.utils.custom_types import BaseModelRIPPLE
@@ -16,7 +16,12 @@ class MovieConfig(BaseModelRIPPLE):
     movie_path: str
         Path to the movie file.
     pixel_size: float
-        Pixel size in Angstroms per pixel.
+        Pixel size of the movie, as collected, in Angstroms per pixel.
+    super_resolution_factor: int
+        Integer factor relating the native `pixel_size` to the desired output pixel
+        size of the final micrograph, i.e.
+        `output_pixel_size = pixel_size * super_resolution_factor`.
+        Default is 1 (no super-resolution).
     fluence: float
         Total fluence in electrons per Angstrom^2.
     fluence_per_frame: float
@@ -54,6 +59,7 @@ class MovieConfig(BaseModelRIPPLE):
 
     movie_path: str | None = None
     pixel_size: float
+    super_resolution_factor: PositiveInt = 1
     fluence: float
     fluence_per_frame: float
     pre_exposure: float = 0.0
@@ -134,6 +140,11 @@ class MovieConfig(BaseModelRIPPLE):
             storage_device=storage_device,
             chunk_size=chunk_size,
         )
+
+    @property
+    def output_pixel_size(self) -> float:
+        """Pixel size of the final micrograph, after Fourier-crop downsampling."""
+        return self.pixel_size * int(self.super_resolution_factor)
 
     @property
     def movie(self) -> torch.Tensor:

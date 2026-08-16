@@ -9,7 +9,11 @@ import torch
 from tifffile import imwrite
 
 from ripple.config.movie_config import MovieConfig
-from ripple.utils.data_io import load_array_from_path, load_tensor_from_path
+from ripple.utils.data_io import (
+    load_array_from_path,
+    load_tensor_from_path,
+    write_mrc_from_tensor,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -257,3 +261,54 @@ def test_movie_config_dark_tif(tif_image, tmp_path, movie_data):
     result = cfg.dark
     assert result.shape == torch.Size([16, 16])
     assert torch.allclose(result, torch.tensor(dark_data))
+
+
+# ---------------------------------------------------------------------------
+# MovieConfig super-resolution downsampling fields
+# ---------------------------------------------------------------------------
+
+
+def test_movie_config_super_resolution_defaults():
+    cfg = MovieConfig(**_base_movie_config_kwargs(pixel_size=0.4))
+    assert cfg.super_resolution_factor == 1
+    assert cfg.output_pixel_size == pytest.approx(0.4)
+
+
+def test_movie_config_output_pixel_size_scales_with_factor():
+    cfg = MovieConfig(
+        **_base_movie_config_kwargs(pixel_size=0.4, super_resolution_factor=2)
+    )
+    assert cfg.output_pixel_size == pytest.approx(0.8)
+
+
+def test_movie_config_super_resolution_factor_must_be_positive():
+    with pytest.raises(ValueError):
+        MovieConfig(
+            **_base_movie_config_kwargs(pixel_size=0.4, super_resolution_factor=0)
+        )
+
+
+# ---------------------------------------------------------------------------
+# write_mrc_from_tensor pixel_size (voxel size) metadata
+# ---------------------------------------------------------------------------
+
+
+def test_write_mrc_from_tensor_writes_voxel_size(tmp_path):
+    path = tmp_path / "out.mrc"
+    data = torch.randn(16, 16, dtype=torch.float32)
+
+    write_mrc_from_tensor(data=data, mrc_path=path, overwrite=True, pixel_size=0.8)
+
+    with mrcfile.open(str(path)) as mrc:
+        assert mrc.voxel_size.x == pytest.approx(0.8, abs=1e-5)
+        assert mrc.voxel_size.y == pytest.approx(0.8, abs=1e-5)
+
+
+def test_write_mrc_from_tensor_no_pixel_size_leaves_voxel_size_zero(tmp_path):
+    path = tmp_path / "out.mrc"
+    data = torch.randn(16, 16, dtype=torch.float32)
+
+    write_mrc_from_tensor(data=data, mrc_path=path, overwrite=True)
+
+    with mrcfile.open(str(path)) as mrc:
+        assert mrc.voxel_size.x == 0
