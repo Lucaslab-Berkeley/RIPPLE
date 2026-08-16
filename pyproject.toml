@@ -50,11 +50,14 @@ dependencies = [
     "teamtomo-basemodel",
     "torch-motion-correction>=0.0.5",
     "torch-fourier-filter",
+    "torch-fourier-rescale",
     "leopard-em",
     "scipy",
     "optuna",
     "h5py",
     "dm4",
+    "opencv-python-headless",
+    "scikit-image",
 ]
 
 # https://peps.python.org/pep-0621/#dependencies-optional-dependencies
