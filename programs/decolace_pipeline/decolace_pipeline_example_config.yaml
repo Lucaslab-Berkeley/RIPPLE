@@ -1,0 +1,63 @@
+#####################################################
+### DeCo-LACE Fused Pipeline Configuration File ###
+#####################################################
+# Runs beam mask estimation, motion estimation, and motion correction for each movie
+# in one pass, sharing a single loaded movie tensor across all three steps.
+
+# --- Computing resources (shared by beam mask estimation and alignment) ---
+computational_config:
+  gpu_id: 0
+  keep_movie_on_cpu: false  # (optional, default false) Keep the prepared movie on CPU RAM; stream frames/chunks to GPU as needed.
+
+# --- Input movie plus metadata (shared by beam mask estimation and alignment) ---
+movie_config:
+  movie_path: "movies/my_movie.eer"   # (required)  Overwritten per-movie by the script; the value here is unused.
+  pixel_size: 0.936                   # (required)  Pixel size in Angstroms per pixel (native/super-resolution pixel size, not the final output pixel size)
+  super_resolution_factor: 1          # (optional, default 1)     Integer factor relating pixel_size to the desired output pixel size: output_pixel_size = pixel_size * super_resolution_factor.
+  fluence: 54.5                       # (required)  Total fluence in electrons per Angstrom^2
+  fluence_per_frame: 1.0              # (required)  Fluence per frame in electrons per Angstrom^2/frame
+  pre_exposure: 0.0                   #             Pre-exposure time in seconds (default: 0.0)
+  voltage: 300.0                      #             Accelerating voltage in kilovolts (default: 300.0)
+  gain_path: null                     # (optional, default null)  Path to gain map file; null means no gain reference applied
+  dark_path: null                     # (optional, default null)  Path to dark map file; null means no dark reference applied
+  gain_flip: 0                        # (optional, default 0)     Gain/Dark flip: 0 = no flip, 1 = flipY, 2 = flipX
+  gain_rot: 0                         # (optional, default 0)     Gain/Dark rotation 0 = no rotation, 1 = 90 deg, 2 = 180 deg, 3 = 270 deg (all CCW)
+  multiply_gain: true                 # (optional, default true)  Whether to multiply movie by gain map (True) or divide (False)
+  mask_fill_noise: true               # (required for this pipeline) Replace pixels outside the estimated beam mask with per-frame Poisson noise instead of zeroing them.
+
+# --- Beam mask estimation parameters ---
+beam_mask_config:
+  threshold_method: "otsu"      # (optional, default "otsu")   Thresholding algorithm for binarising the low-pass-filtered frame sum. Only "otsu" is currently supported.
+  diameter_reduction: 0.0       # (optional, default 0.0)      Fractional shrink applied to both ellipse radii; 0.1 shrinks each axis by 10% to exclude fringe artifacts at the beam edge.
+  low_pass_resolution: 100.0    # (optional, default 100.0)    Low-pass filter cutoff (Angstroms) applied to the frame sum before thresholding.
+
+# --- Output file configuration ---
+output_config:
+  allow_file_overwrite: true          # Allow writing of pre-existing files, safety mechanism.
+  dw_sum_output_path: ../../example/output/dw_sum.mrc                 # (optional)  Path to save dose-weighted sum output, in MRC format. If null, not constructed or saved.
+  non_dw_sum_output_path: null                                        # (optional)  Path to save non-dose-weighted sum output, in MRC format. If null, not constructed or saved.
+  deformation_field_output_path: ../../example/output/def_field.h5    # (optional)  Path to save estimated deformation field, as .csv/.hdf5 file. If null, not saved; file extension chooses output format
+  rendered_movie_output_path: null                                    # (optional)  Path to save pre-processed & rendered movie, in MRC format. If null, not saved.
+  motion_corrected_movie_output_path: null                            # (optional)  Path to save motion corrected movie (aligned, but not summed frames), in MRC format. If null, not saved.
+  loss_trajectories_output_path: null                                 # (optional)  Path to save loss trajectories during optimization, in .csv format. If null, not saved.
+
+# --- Parameters for alignment optimization stage ----
+alignment_config:
+  deformation_field_resolution: [54, 4, 4]  # (required)                          Resolution of deformation field as (nt, nh, nw).
+  deformation_field_path: null              # (optional)                          Path to initial deformation field file (.csv or .hdf5). If null, deformation field initialized to zero.
+  use_xc_prepass: true                      # (optional, default true)            Whether to run a fast cross-correlation pre-pass to estimate global per-frame shifts before gradient optimization.
+
+  max_iterations: 100                       # (required, default 100)             Maximum number of iterations for optimization
+  patch_shape: [1024, 1024]                 # (default [1024, 1024])              Shape of extracted movie patches in pixels (width, height)
+  grid_type: "catmull_rom"                  # (required, default "catmull_rom")   Type of interpolation grid for deformation field: "catmull_rom" or "bspline"
+  loss_type: "ncc"                          # (required, default "mse")           Type of loss function to optimize: "mse", "cc", or "ncc".
+  optimizer_type: "adam"                    # (required, default "adam")          Type of optimizer for deformation field optimization: "adam" or "lbfgs"
+  learning_rate: 0.2                        # (required, default 0.2)             Learning rate for optimization.
+  b_factor: 500.0                           # (required, default 500.0)           B-factor in Angstroms^2 for frame pre-processing.
+  frequency_range: [300.0, 10.0]            # (required, default [300.0, 10.0])   Frequency range in Angstroms for band-pass filtering.
+  skip_movie_preparation: false             # (optional, default false)           Whether to skip movie preparation step.
+
+  early_stopping: false
+  early_stopping_patience: 5          # (required, default 5)
+  early_stopping_window_size: 3       # (required, default 3)
+  early_stopping_tolerance: 1.0e-5    # (required, default 1e-5)
