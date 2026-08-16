@@ -89,6 +89,7 @@ class MovieConfig(BaseModelRIPPLE):
         dark_map: torch.Tensor | None = None,
         mask: torch.Tensor | None = None,
         device: torch.device | str | None = None,
+        storage_device: torch.device | str | None = None,
         chunk_size: int = DEFAULT_PREP_CHUNK_SIZE,
     ) -> torch.Tensor:
         """Apply gain, dark, hot-pixel, mask, and mean-zero corrections to a movie.
@@ -107,10 +108,11 @@ class MovieConfig(BaseModelRIPPLE):
             pixels (``mask == 0``) are replaced with per-frame Poisson. Otherwise, those
             pixel locations are zeroed.
         device : torch.device | str | None
-            Device to prepare the movie on. If None, uses `movie`'s current device.
-            Frames are transferred and corrected `chunk_size` at a time so a large (e.g.
-            CPU-resident) raw movie is never fully duplicated on `device`
-            mid-preparation.
+            Device each chunk's gain/dark/hot-pixel/mask compute runs on. If None, uses
+            `movie`'s current device.
+        storage_device : torch.device | str | None
+            Device the returned, fully-prepared movie is stored on. If None, defaults to
+            `device`.
         chunk_size : int
             Number of frames to transfer/correct at a time.
 
@@ -129,6 +131,7 @@ class MovieConfig(BaseModelRIPPLE):
             mask=mask,
             mask_fill_noise=self.mask_fill_noise,
             device=device,
+            storage_device=storage_device,
             chunk_size=chunk_size,
         )
 

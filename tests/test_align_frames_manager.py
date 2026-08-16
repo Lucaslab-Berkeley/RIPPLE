@@ -409,7 +409,7 @@ class TestCorrectAndSave:
 
         assert len(save_results_calls) == 1
         args, kwargs = save_results_calls[0]
-        assert not kwargs
+        assert kwargs == {"device": manager.computational_config.gpu_device}
         assert args[0] is manager.output_config
         assert args[1] is manager.movie_config
         assert args[2] == "CORRECTED_MOVIE"

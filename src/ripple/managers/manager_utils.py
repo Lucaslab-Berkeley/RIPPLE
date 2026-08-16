@@ -118,6 +118,7 @@ def prepare_movie_if_needed(
     dark_map: torch.Tensor | None,
     mask: torch.Tensor | None,
     device: torch.device,
+    storage_device: torch.device | None = None,
 ) -> torch.Tensor:
     """Prepare the movie unless `alignment_config.skip_movie_preparation` is set.
 
@@ -136,7 +137,10 @@ def prepare_movie_if_needed(
     mask: torch.Tensor | None
         Mask with shape (height, width), or None to skip masking.
     device: torch.device
-        Device to prepare the movie on.
+        Device each chunk's gain/dark/hot-pixel/mask compute runs on.
+    storage_device: torch.device | None
+        Device the returned, fully-prepared movie is stored on. If None, defaults to
+        `device`.
 
     Returns
     -------
@@ -146,7 +150,9 @@ def prepare_movie_if_needed(
     """
     if alignment_config.skip_movie_preparation:
         return movie
-    return movie_config.prepare(movie, gain_map, dark_map, mask=mask, device=device)
+    return movie_config.prepare(
+        movie, gain_map, dark_map, mask=mask, device=device, storage_device=storage_device
+    )
 
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -157,6 +163,7 @@ def save_results(
     updated_deformation_field: DeformationField,
     movie_prepared: torch.Tensor,
     trajectory: "OptimizationTracker",
+    device: torch.device | None = None,
 ) -> None:
     """
     Save the results of the alignment.
@@ -175,6 +182,9 @@ def save_results(
         The prepared movie.
     trajectory: Optional[OptimizationTracker]
         The trajectory of the alignment.
+    device: torch.device | None
+        Device the dose-weighting FFT compute runs on (chunked, frame-by-frame). If
+        None, uses `corrected_movie`'s current device.
 
     Returns
     -------
@@ -189,6 +199,7 @@ def save_results(
             movie_config.pre_exposure,
             movie_config.fluence_per_frame,
             movie_config.voltage,
+            device=device,
         )
         dw_movie = dw_movie.cpu()
         write_mrc_from_tensor(

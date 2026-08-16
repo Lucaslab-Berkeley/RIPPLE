@@ -23,6 +23,7 @@ def prepare_movie(
     mask: torch.Tensor | None = None,
     mask_fill_noise: bool = False,
     device: torch.device | str | None = None,
+    storage_device: torch.device | str | None = None,
     chunk_size: int = DEFAULT_PREP_CHUNK_SIZE,
 ) -> torch.Tensor:
     """Prepare the movie for alignment.
@@ -52,7 +53,11 @@ def prepare_movie(
         If True (and `mask` is provided), pixels where `mask == 0` are replaced with
         per-frame Poisson noise instead of being zeroed out. Ignored if `mask` is None.
     device: torch.device | str | None
-        Device to prepare the movie on. If None, uses `movie`'s current device.
+        Device each chunk's gain/dark/hot-pixel/mask compute runs on. If None, uses
+        `movie`'s current device.
+    storage_device: torch.device | str | None
+        Device the returned `prepared` movie is stored on. If None, defaults to
+        `device` (or `movie`'s device if `device` is also None).
     chunk_size: int
         Number of frames to transfer/correct at a time.
 
@@ -61,7 +66,10 @@ def prepare_movie(
     torch.Tensor
     The prepared movie.
     """
-    target_device = torch.device(device) if device is not None else movie.device
+    compute_device = torch.device(device) if device is not None else movie.device
+    target_device = (
+        torch.device(storage_device) if storage_device is not None else compute_device
+    )
 
     n_frames = movie.shape[0]
     chunk_size = max(1, min(chunk_size, n_frames))
@@ -70,17 +78,14 @@ def prepare_movie(
     # Iterate over each chunk of frames
     for start in range(0, n_frames, chunk_size):
         end = min(start + chunk_size, n_frames)
-        chunk = movie[start:end].to(device=target_device, dtype=torch.float32)
+        chunk = movie[start:end].to(device=compute_device, dtype=torch.float32)
         chunk = apply_gain(chunk, gain_map, gain_flip, gain_rot, multiply_gain)
         chunk = apply_dark(chunk, dark_map)
         chunk = remove_hot_pixels(chunk)
         chunk = apply_mask(chunk, mask, fill_noise=mask_fill_noise)
-        prepared[start:end] = chunk
-
-    # `prepared` is a buffer we own outright (not caller-supplied), so it is
-    # safe to finish it off in place rather than allocating one more full copy.
-    frame_means = torch.mean(prepared, dim=(1, 2), keepdim=True)
-    prepared -= frame_means
+        frame_means = torch.mean(chunk, dim=(1, 2), keepdim=True)
+        chunk -= frame_means
+        prepared[start:end] = chunk.to(target_device)
 
     return prepared
 

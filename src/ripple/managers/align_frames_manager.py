@@ -115,7 +115,8 @@ class AlignFramesManager(BaseModelRIPPLE):
             gain_map,
             dark_map,
             mask,
-            self.computational_config.movie_storage_device,
+            self.computational_config.gpu_device,
+            storage_device=self.computational_config.movie_storage_device,
         )
 
     def estimate_motion(
@@ -191,4 +192,5 @@ class AlignFramesManager(BaseModelRIPPLE):
             deformation_field,
             movie,
             trajectory,
+            device=device,
         )
