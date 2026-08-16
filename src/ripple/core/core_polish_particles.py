@@ -445,7 +445,6 @@ def estimate_local_motion_2dtm_bayesian(
             pre_exposure=pre_exposure,
             dose_per_frame=fluence_per_frame,
             voltage=voltage,
-            memory_efficient=True,
             chunk_size=1,
             memory_strategy="full",
         )
