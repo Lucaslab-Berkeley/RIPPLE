@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TypedDict
+
 import cv2
 import numpy as np
 import torch
@@ -9,6 +11,25 @@ from skimage.measure import label, regionprops
 from torch_fourier_filter.bandpass import bandpass_filter
 
 from ripple.core.prepare_movie import DEFAULT_PREP_CHUNK_SIZE
+
+
+class BeamMaskParams(TypedDict):
+    """Fitted ellipse and crop-bound parameters returned by `estimate_beam_mask`."""
+
+    center_y: float
+    center_x: float
+    axis1: float
+    axis2: float
+    angle_deg: float
+    diameter_reduction: float
+    image_shape_y: int
+    image_shape_x: int
+    crop_min_y: int
+    crop_max_y: int
+    crop_min_x: int
+    crop_max_x: int
+    threshold_method: str
+    pixel_size: float
 
 # ---------------------------------------------------------------------------
 # Frame summation
@@ -329,7 +350,7 @@ def estimate_beam_mask(
     diameter_reduction: float,
     low_pass_resolution: float,
     device: torch.device | str | None = None,
-) -> dict[str, float | int | str]:
+) -> BeamMaskParams:
     """Estimate a DeCo-LACE beam mask ellipse from a raw frame sum.
 
     Low-pass filters `frame_sum` (on `device`), thresholds it with Otsu's method,
@@ -356,11 +377,8 @@ def estimate_beam_mask(
 
     Returns
     -------
-    dict[str, float | int | str]
-        Fitted ellipse and crop-bound parameters: ``center_y``, ``center_x``,
-        ``axis1``, ``axis2``, ``angle_deg``, ``diameter_reduction``,
-        ``image_shape_y``, ``image_shape_x``, ``crop_min_y``, ``crop_max_y``,
-        ``crop_min_x``, ``crop_max_x``, ``threshold_method``, ``pixel_size``.
+    BeamMaskParams
+        Fitted ellipse and crop-bound parameters.
 
     Raises
     ------
