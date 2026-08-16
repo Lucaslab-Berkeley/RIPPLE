@@ -253,7 +253,7 @@ def _fill_masked_noise(movie: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     """Replace pixels where `mask == 0` with per-frame Poisson noise."""
     _, height, width = movie.shape
     central = movie[:, height // 4 : 3 * height // 4, width // 4 : 3 * width // 4]
-    frame_lambda = torch.clamp(torch.mean(central, dim=(1, 2), keepdim=True), min=1.0)
+    frame_lambda = torch.clamp(torch.mean(central, dim=(1, 2), keepdim=True), min=1e-6)
     noise = torch.poisson(frame_lambda.expand_as(movie))
 
     outside_mask = (mask == 0).unsqueeze(0).expand_as(movie)
