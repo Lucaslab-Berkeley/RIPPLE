@@ -7,6 +7,7 @@ import pandas as pd
 import torch
 import yaml
 from pydantic import ConfigDict
+from teamtomo_basemodel import BaseModelTeamTomo
 
 if TYPE_CHECKING:
     from torch_motion_correction import OptimizationTracker
@@ -20,11 +21,10 @@ from ripple.config import (
 )
 from ripple.core import core_optimize_sigmas, core_polish_particles
 from ripple.managers import manager_utils
-from ripple.utils.custom_types import BaseModelRIPPLE
 from ripple.utils.data_io import load_tensor_from_path
 
 
-class PolishParticlesManager(BaseModelRIPPLE):
+class PolishParticlesManager(BaseModelTeamTomo):
     """Manager for aligning frames of a cryo-EM movie."""
 
     model_config: ClassVar = ConfigDict(arbitrary_types_allowed=True)

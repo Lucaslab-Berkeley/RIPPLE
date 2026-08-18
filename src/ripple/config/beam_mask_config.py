@@ -3,12 +3,12 @@
 from typing import Literal
 
 import torch
+from teamtomo_basemodel import BaseModelTeamTomo
 
 from ripple.core.beam_mask import make_ellipse_mask
-from ripple.utils.custom_types import BaseModelRIPPLE
 
 
-class BeamMaskConfig(BaseModelRIPPLE):
+class BeamMaskConfig(BaseModelTeamTomo):
     """Algorithm parameters for DeCo-LACE beam mask estimation.
 
     Parameters
@@ -30,7 +30,7 @@ class BeamMaskConfig(BaseModelRIPPLE):
     low_pass_resolution: float = 100.0
 
 
-class BeamMaskResult(BaseModelRIPPLE):
+class BeamMaskResult(BaseModelTeamTomo):
     """Fitted ellipse and crop bounds for a DeCo-LACE beam mask.
 
     Ellipse parameters are stored in the ``cv2.fitEllipse`` convention: ``axis1`` lies

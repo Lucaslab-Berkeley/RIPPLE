@@ -2,13 +2,13 @@
 
 import torch
 from pydantic import PositiveInt, field_validator
+from teamtomo_basemodel import BaseModelTeamTomo
 
 from ripple.core.prepare_movie import DEFAULT_PREP_CHUNK_SIZE, prepare_movie
-from ripple.utils.custom_types import BaseModelRIPPLE
 from ripple.utils.data_io import load_tensor_from_path, render_eer_to_tensor
 
 
-class MovieConfig(BaseModelRIPPLE):
+class MovieConfig(BaseModelTeamTomo):
     """Serialization and validation of movie parameters for RIPPLE.
 
     Parameters

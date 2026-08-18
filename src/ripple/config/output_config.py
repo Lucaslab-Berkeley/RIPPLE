@@ -3,9 +3,8 @@
 import os
 
 from pydantic import model_validator
+from teamtomo_basemodel import BaseModelTeamTomo
 from typing_extensions import Self
-
-from ripple.utils.custom_types import BaseModelRIPPLE
 
 
 def check_file_path_and_permissions(path: str | None, allow_overwrite: bool) -> None:
@@ -36,7 +35,7 @@ def check_file_path_and_permissions(path: str | None, allow_overwrite: bool) -> 
         )
 
 
-class OutputConfig(BaseModelRIPPLE):
+class OutputConfig(BaseModelTeamTomo):
     """Configuration for output files for RIPPLE."""
 
     allow_file_overwrite: bool = True

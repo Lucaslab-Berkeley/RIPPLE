@@ -4,6 +4,7 @@ from typing import ClassVar
 
 import torch
 from pydantic import ConfigDict
+from teamtomo_basemodel import BaseModelTeamTomo
 
 from ripple.config import (
     BeamMaskConfig,
@@ -12,10 +13,9 @@ from ripple.config import (
     MovieConfig,
 )
 from ripple.core.beam_mask import estimate_beam_mask, sum_movie_chunked
-from ripple.utils.custom_types import BaseModelRIPPLE
 
 
-class BeamMaskManager(BaseModelRIPPLE):
+class BeamMaskManager(BaseModelTeamTomo):
     """Lightweight manager for estimating a DeCo-LACE beam mask from a cryo-EM movie."""
 
     model_config: ClassVar = ConfigDict(arbitrary_types_allowed=True)

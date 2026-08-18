@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import Field, field_validator
+from teamtomo_basemodel import BaseModelTeamTomo
 from torch_motion_correction import (
     DeformationField,
     FourierFilterConfig,
@@ -11,14 +12,12 @@ from torch_motion_correction import (
 )
 from torch_motion_correction import OptimizationConfig as MotionOptimizationConfig
 
-from ripple.utils.custom_types import BaseModelRIPPLE
-
 # Type alias for positive integer
 PositiveInt = Annotated[int, Field(gt=0)]
 PositiveFloat = Annotated[float, Field(gt=0)]
 
 
-class BaseAlignmentConfig(BaseModelRIPPLE):
+class BaseAlignmentConfig(BaseModelTeamTomo):
     """Base configuration for alignment operations.
 
     This class contains common parameters shared between different alignment
@@ -212,7 +211,7 @@ class AlignFramesConfig(BaseAlignmentConfig):
         )
 
 
-class PriorConfig(BaseModelRIPPLE):
+class PriorConfig(BaseModelTeamTomo):
     """Configuration for motion priors.
 
     Parameters
@@ -254,7 +253,7 @@ class PriorConfig(BaseModelRIPPLE):
     init_sigma_a_offset: float = 1.0
 
 
-class OptimizationConfig(BaseModelRIPPLE):
+class OptimizationConfig(BaseModelTeamTomo):
     """Configuration for sigma optimization.
 
     Parameters

@@ -4,6 +4,7 @@ from typing import Any, ClassVar
 
 import torch
 from pydantic import ConfigDict
+from teamtomo_basemodel import BaseModelTeamTomo
 from torch_motion_correction import (
     DeformationField,
     OptimizationTracker,
@@ -19,10 +20,9 @@ from ripple.config import (
     OutputConfig,
 )
 from ripple.managers import manager_utils
-from ripple.utils.custom_types import BaseModelRIPPLE
 
 
-class AlignFramesManager(BaseModelRIPPLE):
+class AlignFramesManager(BaseModelTeamTomo):
     """Manager for aligning frames of a cryo-EM movie."""
 
     model_config: ClassVar = ConfigDict(arbitrary_types_allowed=True)

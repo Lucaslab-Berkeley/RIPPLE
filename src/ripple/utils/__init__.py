@@ -1,6 +1,6 @@
 """Utility functions for RIPPLE."""
 
-from .custom_types import BaseModelRIPPLE, ExcludedTensor
+from .custom_types import ExcludedTensor
 from .data_io import (
     load_array_from_path,
     load_tensor_from_path,
@@ -10,7 +10,6 @@ from .data_io import (
 )
 
 __all__ = [
-    "BaseModelRIPPLE",
     "ExcludedTensor",
     "load_array_from_path",
     "load_tensor_from_path",
