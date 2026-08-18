@@ -44,7 +44,7 @@ movie_config:
 
 output_config:
   # Whether to allow overwriting existing output files (default: true)
-  allow_file_overwrite: true
+  allow_file_overwrite: false
   
   # Optional: Path to save dose-weighted sum output (.mrc)
   dw_sum_output_path: ../../example/output/dw_sum_polished_laplacian_10x10.mrc

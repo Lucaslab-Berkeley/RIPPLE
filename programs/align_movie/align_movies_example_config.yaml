@@ -28,7 +28,7 @@ movie_config:
 
 # --- Output file configuration ---
 output_config:
-  allow_file_overwrite: true          # Allow writing of pre-existing files, safety mechanism.
+  allow_file_overwrite: false          # Allow writing of pre-existing files, safety mechanism.
   dw_sum_output_path: ../../example/output/dw_sum.mrc                 # (optional)  Path to save dose-weighted sum output, in MRC format. If null, not constructed or saved.
   non_dw_sum_output_path: null                                        # (optional)  Path to save non-dose-weighted sum output, in MRC format. If null, not constructed or saved.
   deformation_field_output_path: ../../example/output/def_field.csv   # (optional)  Path to save estimated deformation field, as .csv/.hdf5 file. If null, not saved; file extension chooses output format

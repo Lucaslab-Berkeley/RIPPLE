@@ -48,6 +48,23 @@ def main() -> None:
     for movie_path in get_movie_paths(MOVIE_DIR):
         movie_config.movie_path = movie_path
 
+        # Derive output from base-name of movie. Only update fields that are not None
+        stem = os.path.splitext(os.path.basename(movie_path))[0]
+        out_cfg = align_manager.output_config
+
+        def replace_path(path: str, stem: str = stem) -> str:
+            """Replace the path with a new path that includes the stem."""
+            return f"{stem}_{path}" if path is not None else None
+
+        # fmt: off
+        out_cfg.dw_sum_output_path                  = replace_path(out_cfg.dw_sum_output_path)  # noqa: E501
+        out_cfg.deformation_field_output_path       = replace_path(out_cfg.deformation_field_output_path)  # noqa: E501
+        out_cfg.motion_corrected_movie_output_path  = replace_path(out_cfg.motion_corrected_movie_output_path)  # noqa: E501
+        out_cfg.rendered_movie_output_path          = replace_path(out_cfg.rendered_movie_output_path)  # noqa: E501
+        out_cfg.non_dw_sum_output_path              = replace_path(out_cfg.non_dw_sum_output_path)  # noqa: E501
+        out_cfg.loss_trajectories_output_path       = replace_path(out_cfg.loss_trajectories_output_path)  # noqa: E501
+        # fmt: on
+
         # 1. Load the raw movie once, from disk.
         movie = movie_config.movie
 
