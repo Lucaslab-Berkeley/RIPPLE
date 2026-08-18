@@ -27,7 +27,7 @@ class MovieConfig(BaseModelRIPPLE):
     fluence_per_frame: float
         Fluence per frame in electrons per Angstrom^2/frame.
     pre_exposure: float
-        Pre-exposure time in seconds.
+        The total pre-exposure in (e-/A^2) before the first frame of the movie.
     voltage: float
         Accelerating voltage in kilovolts.
         Default is 300.0 kV.

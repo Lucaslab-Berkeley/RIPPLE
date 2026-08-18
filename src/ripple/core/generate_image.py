@@ -59,7 +59,7 @@ def generate_dose_weighted_image(
     pixel_size: float
         The pixel size in Angstroms per pixel.
     pre_exposure: float
-        The pre-exposure time in seconds.
+        The total pre-exposure in (e-/A^2) before the first frame of the movie.
     fluence_per_frame: float
         The dose per frame in electrons per Angstrom^2/frame.
     voltage: float

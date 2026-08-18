@@ -110,7 +110,8 @@ def core_optimize_sigmas(
         template as the motion loop.
         Default is None.
     pre_exposure : float
-        Pre-exposure time in seconds. Default 0.0
+        The total pre-exposure in (e-/A^2) before the first frame of the movie.
+        Default 0.0.
     fluence_per_frame : float
         Fluence per frame in e/Å². Default 1.0
     motion_iterations : int
@@ -322,7 +323,8 @@ def optimize_sigmas_2dtm_nelder_mead(
         template as the motion loop.
         Default is None.
     pre_exposure : float
-        Pre-exposure time in seconds. Default 0.0
+        The total pre-exposure in (e-/A^2) before the first frame of the movie.
+        Default 0.0
     fluence_per_frame : float
         Fluence per frame in e/Å². Default 1.0
     motion_iterations : int
@@ -863,7 +865,8 @@ def optimize_sigmas_2dtm_optuna(
         template as the motion loop.
         Default is None.
     pre_exposure : float
-        Pre-exposure time in seconds. Default 0.0
+        The total pre-exposure in (e-/A^2) before the first frame of the movie.
+        Default 0.0
     fluence_per_frame : float
         Fluence per frame in e/Å². Default 1.0
     motion_iterations : int

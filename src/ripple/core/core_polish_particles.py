@@ -96,7 +96,7 @@ def core_polish_particles(
     deformation_field_resolution: tuple[int, int, int]
         Resolution of the deformation field (nt, nh, nw).
     pre_exposure: float
-        Pre-exposure time in seconds.
+       The total pre-exposure in (e-/A^2) before the first frame of the movie.
     fluence_per_frame: float
         Fluence per frame in electrons per pixel.
     max_iterations: int
@@ -285,7 +285,8 @@ def estimate_local_motion_2dtm_bayesian(
     refine_config_path: str
         Path to the refine config file.
     pre_exposure: float
-        Pre-exposure time in seconds. Default is 0.0.
+        The total pre-exposure in (e-/A^2) before the first frame of the movie.
+        Default is 0.0.
     fluence_per_frame: float
         Dose per frame in electrons per pixel. Default is 1.0.
     particle_indices: pd.Index = None,
@@ -583,7 +584,8 @@ def estimate_local_motion_2dtm_particles_bayesian(
     refine_config_path: str
         Path to the refine config file.
     pre_exposure: float
-        Pre-exposure time in seconds. Default is 0.0.
+        The total pre-exposure in (e-/A^2) before the first frame of the movie.
+        Default is 0.0.
     fluence_per_frame: float
         Dose per frame in electrons per pixel. Default is 1.0.
     device: torch.device, optional

@@ -19,7 +19,7 @@ movie_config:
   # Required: Fluence per frame in electrons per Angstrom^2/frame
   fluence_per_frame: 1.0
   
-  # Pre-exposure time in seconds (default: 0.0)
+  # The total pre-exposure in (e-/A^2) before the first frame of the movie (default: 0.0)
   pre_exposure: 0.0
   
   # Accelerating voltage in kilovolts (default: 300.0)
