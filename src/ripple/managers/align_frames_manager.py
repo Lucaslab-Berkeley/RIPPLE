@@ -98,15 +98,13 @@ class AlignFramesManager(BaseModelRIPPLE):
         torch.Tensor
             Prepared movie tensor ready for motion estimation.
         """
-        movie, gain_map, dark_map, mask, _ = manager_utils.load_missing_tensors(
+        movie, gain_map, dark_map, mask = manager_utils.load_missing_tensors(
             self.computational_config,
             self.movie_config,
-            self.alignment_config,
             movie,
             gain_map,
             dark_map,
             mask,
-            initial_deformation_field=None,
         )
         return manager_utils.prepare_movie_if_needed(
             self.movie_config,
@@ -146,9 +144,19 @@ class AlignFramesManager(BaseModelRIPPLE):
         tuple[DeformationField, OptimizationTracker]
             Estimated deformation field and optimization history.
         """
+        # Check only one of 'use_xc_prepass' and 'initial_deformation_field' is not None
+        if (
+            self.alignment_config.use_xc_prepass
+            and initial_deformation_field is not None
+        ):
+            raise ValueError(
+                "Cannot use both 'use_xc_prepass' and 'initial_deformation_field'. "
+                "Select only one (or neither) of them to pre-seed optimization stage."
+            )
+
         device = self.computational_config.gpu_device
 
-        if self.alignment_config.use_xc_prepass and initial_deformation_field is None:
+        if self.alignment_config.use_xc_prepass:
             initial_deformation_field = estimate_global_motion(
                 image=movie,
                 pixel_spacing=self.movie_config.pixel_size,

@@ -74,7 +74,7 @@ alignment_config:
   deformation_field_path: ../../example/output/def_field.csv
   
   # Number of optimization iterations (default: 100)
-  n_iterations: 100
+  max_iterations: 100
   
   # Type of interpolation grid: "catmull_rom" or "bspline" (default: "catmull_rom")
   grid_type: "catmull_rom"

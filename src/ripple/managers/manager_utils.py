@@ -24,13 +24,12 @@ if TYPE_CHECKING:
     )
 
 
-# Tuple of (movie, gain_map, dark_map, mask, initial_deformation_field)
+# Tuple of (movie, gain_map, dark_map, mask)
 LoadedTensors = tuple[
     torch.Tensor,
     torch.Tensor | None,
     torch.Tensor | None,
     torch.Tensor | None,
-    DeformationField | None,
 ]
 
 
@@ -49,12 +48,10 @@ def _load_or_move(
 def load_missing_tensors(
     computational_config: "ComputationalConfig",
     movie_config: "MovieConfig",
-    alignment_config: "BaseAlignmentConfig",
     movie: torch.Tensor | None = None,
     gain_map: torch.Tensor | None = None,
     dark_map: torch.Tensor | None = None,
     mask: torch.Tensor | None = None,
-    initial_deformation_field: DeformationField | None = None,
 ) -> LoadedTensors:
     """Load only the tensors that are not provided as arguments.
 
@@ -64,8 +61,6 @@ def load_missing_tensors(
         Computational configuration containing device information.
     movie_config: MovieConfig
         Movie configuration containing movie, gain, dark map, and mask.
-    alignment_config: BaseAlignmentConfig
-        Alignment configuration containing deformation field.
     movie: Optional[torch.Tensor]
         Movie tensor. If None, will be loaded from config.
     gain_map: Optional[torch.Tensor]
@@ -75,16 +70,11 @@ def load_missing_tensors(
     mask: Optional[torch.Tensor]
         Mask tensor with shape (height, width). If None, will be loaded from
         config (or remain None if no ``mask_path`` is configured).
-    initial_deformation_field: DeformationField | None
-        Starting deformation field. If None, falls back to
-        ``alignment_config.initial_deformation_field`` (loaded from disk, or
-        None when no path is configured — the backend will zero-initialise).
 
     Returns
     -------
     LoadedTensors
-        Tuple of (movie, gain_map, dark_map, mask, initial_deformation_field), with
-        missing ones loaded from config.
+        Tuple (movie, gain_map, dark_map, mask), with missing ones loaded from config.
     """
     device = computational_config.gpu_device
 
@@ -99,14 +89,39 @@ def load_missing_tensors(
     dark_map = _load_or_move(dark_map, lambda: movie_config.dark, device)
     mask = _load_or_move(mask, lambda: movie_config.mask, device)
 
+    return movie, gain_map, dark_map, mask
+
+
+def load_initial_deformation_field(
+    alignment_config: "BaseAlignmentConfig",
+    device: torch.device,
+    initial_deformation_field: DeformationField | None = None,
+) -> DeformationField | None:
+    """Return `initial_deformation_field`, loading it from config if not provided.
+
+    Parameters
+    ----------
+    alignment_config: BaseAlignmentConfig
+        Alignment configuration containing the deformation field path.
+    device: torch.device
+        Device to move the resulting deformation field to.
+    initial_deformation_field: DeformationField | None
+        Starting deformation field. If None, falls back to
+        ``alignment_config.initial_deformation_field`` (loaded from disk, or
+        None when no path is configured — the backend will zero-initialise).
+
+    Returns
+    -------
+    DeformationField | None
+        The resolved deformation field, moved to `device`, or None.
+    """
     if initial_deformation_field is None:
         initial_deformation_field = alignment_config.initial_deformation_field
-        if initial_deformation_field is not None:
-            initial_deformation_field = initial_deformation_field.to(device)
-    else:
-        initial_deformation_field = initial_deformation_field.to(device)
-
-    return movie, gain_map, dark_map, mask, initial_deformation_field
+    return (
+        initial_deformation_field.to(device)
+        if initial_deformation_field is not None
+        else None
+    )
 
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments

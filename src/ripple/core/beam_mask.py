@@ -31,6 +31,7 @@ class BeamMaskParams(TypedDict):
     threshold_method: str
     pixel_size: float
 
+
 # ---------------------------------------------------------------------------
 # Frame summation
 # ---------------------------------------------------------------------------
@@ -178,8 +179,8 @@ def fit_ellipse(binary: np.ndarray) -> tuple[float, float, float, float, float]:
     ValueError
         If the binary image has no foreground pixels.
     """
-    labeled: np.ndarray = label(binary)  # type: ignore[no-untyped-call]
-    props = regionprops(labeled)  # type: ignore[no-untyped-call]
+    labeled: np.ndarray = label(binary)
+    props = regionprops(labeled)
     if not props:
         raise ValueError("No connected components found in the binary image.")
 

@@ -51,7 +51,7 @@ def core_polish_particles(
     deformation_field_resolution: tuple[int, int, int],  # (nt, nh, nw)
     pre_exposure: float = 0.0,
     fluence_per_frame: float = 1.0,
-    n_iterations: int = 100,
+    max_iterations: int = 100,
     optimizer_kwargs: dict[str, Any] | None = None,
     grid_type: Literal["catmull_rom", "bspline"] = "catmull_rom",
     correlation_batch_size: int = 20,
@@ -99,7 +99,7 @@ def core_polish_particles(
         Pre-exposure time in seconds.
     fluence_per_frame: float
         Fluence per frame in electrons per pixel.
-    n_iterations: int
+    max_iterations: int
         Number of iterations for the optimization process.
     optimizer_kwargs: dict[str, Any] | None
         Keyword arguments for the optimizer.
@@ -172,7 +172,7 @@ def core_polish_particles(
         "refine_config_path": refine_config_path,
         "pre_exposure": pre_exposure,
         "fluence_per_frame": fluence_per_frame,
-        "n_iterations": n_iterations,
+        "max_iterations": max_iterations,
         "optimizer_kwargs": optimizer_kwargs,
         "correlation_batch_size": correlation_batch_size,
         "particle_indices": particle_indices,
@@ -240,7 +240,7 @@ def estimate_local_motion_2dtm_bayesian(
     refine_config_path: str,
     pre_exposure: float = 0.0,
     fluence_per_frame: float = 1.0,
-    n_iterations: int = 100,
+    max_iterations: int = 100,
     optimizer_kwargs: dict[str, Any] | None = None,
     grid_type: Literal["catmull_rom", "bspline"] = "catmull_rom",
     correlation_batch_size: int = 20,
@@ -302,7 +302,7 @@ def estimate_local_motion_2dtm_bayesian(
         Batch size for the correlation. Default is 20.
     device: torch.device = None,
         Device to perform computation on. If None, uses the device of the input image.
-    n_iterations: int = 100,
+    max_iterations: int = 100,
         Number of iterations for the optimization process. Default is 100.
     optimizer_kwargs: dict[str, Any] | None = None,
         Keyword arguments for the optimizer. If None, uses defaults.
@@ -413,8 +413,8 @@ def estimate_local_motion_2dtm_bayesian(
         amsgrad=False,
     )
 
-    # "Training" loop going over all patched n_iterations times
-    pbar = tqdm.tqdm(range(n_iterations))
+    # "Training" loop going over all patched max_iterations times
+    pbar = tqdm.tqdm(range(max_iterations))
 
     for iter_idx in pbar:
         if save_intermediate_fields:
@@ -539,7 +539,7 @@ def estimate_local_motion_2dtm_particles_bayesian(
     refine_config_path: str,
     pre_exposure: float = 0.0,
     fluence_per_frame: float = 1.0,
-    n_iterations: int = 100,
+    max_iterations: int = 100,
     optimizer_kwargs: dict[str, Any] | None = None,
     correlation_batch_size: int = 20,
     particle_batch_size: int = 102,
@@ -588,7 +588,7 @@ def estimate_local_motion_2dtm_particles_bayesian(
         Dose per frame in electrons per pixel. Default is 1.0.
     device: torch.device, optional
         Device to perform computation on. If None, uses the device of the input image.
-    n_iterations: int
+    max_iterations: int
         Number of iterations for the optimization process. Default is 100.
     optimizer_kwargs: dict[str, Any] | None = None,
         Keyword arguments for the optimizer. If None, uses defaults.
@@ -684,8 +684,8 @@ def estimate_local_motion_2dtm_particles_bayesian(
         amsgrad=False,
     )
 
-    # "Training" loop going over all patched n_iterations times
-    pbar = tqdm.tqdm(range(n_iterations))
+    # "Training" loop going over all patched max_iterations times
+    pbar = tqdm.tqdm(range(max_iterations))
 
     # Create batch configs once before optimization loop
     # This will work with the already-filtered CSV

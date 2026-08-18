@@ -61,7 +61,7 @@ class PolishParticlesManager(BaseModelRIPPLE):
             ),
             "pre_exposure": self.movie_config.pre_exposure,
             "fluence_per_frame": self.movie_config.fluence_per_frame,
-            "n_iterations": self.alignment_config.n_iterations,
+            "max_iterations": self.alignment_config.max_iterations,
             "optimizer_kwargs": optimizer_kwargs,
             "grid_type": self.alignment_config.grid_type,
             "voltage": voltage,
@@ -124,20 +124,17 @@ class PolishParticlesManager(BaseModelRIPPLE):
         intermediate_fields_dir: str | None
             Directory to save the intermediate fields.
         """
-        (
-            movie,
-            gain_map,
-            dark_map,
-            mask,
-            deformation_field,
-        ) = manager_utils.load_missing_tensors(
+        movie, gain_map, dark_map, mask = manager_utils.load_missing_tensors(
             self.computational_config,
             self.movie_config,
-            self.alignment_config,
             movie,
             gain_map,
             dark_map,
             mask,
+        )
+        deformation_field = manager_utils.load_initial_deformation_field(
+            self.alignment_config,
+            self.computational_config.gpu_device,
             deformation_field,
         )
 
