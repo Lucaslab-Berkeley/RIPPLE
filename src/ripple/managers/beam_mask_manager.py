@@ -45,6 +45,7 @@ class BeamMaskManager(BaseModelTeamTomo):
         device = self.computational_config.gpu_device
         frame_sum = sum_movie_chunked(movie, device=device)
 
+        crop_bounds_config = self.beam_mask_config.crop_bounds_config
         result_dict = estimate_beam_mask(
             frame_sum,
             self.movie_config.pixel_size,
@@ -52,5 +53,8 @@ class BeamMaskManager(BaseModelTeamTomo):
             self.beam_mask_config.diameter_reduction,
             self.beam_mask_config.low_pass_resolution,
             device=device,
+            crop_mode=crop_bounds_config.mode,
+            crop_round_to=crop_bounds_config.round_to,
+            crop_target_shape=crop_bounds_config.target_shape,
         )
         return BeamMaskResult(**result_dict)

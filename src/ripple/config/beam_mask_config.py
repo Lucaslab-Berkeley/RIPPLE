@@ -5,6 +5,7 @@ from typing import Literal
 import torch
 from teamtomo_basemodel import BaseModelTeamTomo
 
+from ripple.config.crop_bounds_config import CropBoundsConfig
 from ripple.core.beam_mask import make_ellipse_mask
 
 
@@ -23,11 +24,15 @@ class BeamMaskConfig(BaseModelTeamTomo):
     low_pass_resolution: float
         Low-pass filter cutoff, in Angstroms, applied to the frame sum before
         thresholding. Default is 100.0.
+    crop_bounds_config: CropBoundsConfig
+        Size policy for cropping movie frames down to the region covered by the beam
+        mask. Default disables cropping (``mode="none"``).
     """
 
     threshold_method: Literal["otsu"] = "otsu"
     diameter_reduction: float = 0.0
     low_pass_resolution: float = 100.0
+    crop_bounds_config: CropBoundsConfig = CropBoundsConfig()
 
 
 class BeamMaskResult(BaseModelTeamTomo):
@@ -65,6 +70,14 @@ class BeamMaskResult(BaseModelTeamTomo):
         Left column of the tight bounding-box crop region.
     crop_max_x: int
         Right column of the crop region, inclusive.
+    output_crop_min_y: int
+        Top row of the requested output crop region (see `CropBoundsConfig`).
+    output_crop_max_y: int
+        Bottom row of the output crop region, inclusive.
+    output_crop_min_x: int
+        Left column of the output crop region.
+    output_crop_max_x: int
+        Right column of the output crop region, inclusive.
     threshold_method: str
         Thresholding algorithm used to binarise the filtered frame sum.
     pixel_size: float
@@ -83,6 +96,10 @@ class BeamMaskResult(BaseModelTeamTomo):
     crop_max_y: int
     crop_min_x: int
     crop_max_x: int
+    output_crop_min_y: int
+    output_crop_max_y: int
+    output_crop_min_x: int
+    output_crop_max_x: int
     threshold_method: str
     pixel_size: float
 
@@ -90,6 +107,16 @@ class BeamMaskResult(BaseModelTeamTomo):
     def crop_bounds(self) -> tuple[int, int, int, int]:
         """Tight bounding box as ``(min_y, max_y, min_x, max_x)``."""
         return self.crop_min_y, self.crop_max_y, self.crop_min_x, self.crop_max_x
+
+    @property
+    def output_crop_bounds(self) -> tuple[int, int, int, int]:
+        """Requested output crop region as ``(min_y, max_y, min_x, max_x)``."""
+        return (
+            self.output_crop_min_y,
+            self.output_crop_max_y,
+            self.output_crop_min_x,
+            self.output_crop_max_x,
+        )
 
     def to_mask(self) -> torch.Tensor:
         """Regenerate the boolean beam mask from the stored ellipse parameters.

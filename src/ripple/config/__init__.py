@@ -9,6 +9,7 @@ from .alignment_config import (
 )
 from .beam_mask_config import BeamMaskConfig, BeamMaskResult
 from .computational_config import ComputationalConfig
+from .crop_bounds_config import CropBoundsConfig
 from .movie_config import MovieConfig
 from .output_config import OutputConfig
 
@@ -18,6 +19,7 @@ __all__ = [
     "BeamMaskConfig",
     "BeamMaskResult",
     "ComputationalConfig",
+    "CropBoundsConfig",
     "MovieConfig",
     "OptimizationConfig",
     "OutputConfig",

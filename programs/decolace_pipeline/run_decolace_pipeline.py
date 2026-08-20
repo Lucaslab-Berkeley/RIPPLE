@@ -11,6 +11,7 @@ from ripple.config import (
     MovieConfig,
     OutputConfig,
 )
+from ripple.core.crop_bounds import crop_movie
 from ripple.managers import AlignFramesManager, BeamMaskManager
 
 PIPELINE_YAML_PATH = "decolace_pipeline_example_config.yaml"
@@ -71,12 +72,17 @@ def main() -> None:
         # 2. Estimate the beam mask from the raw frame sum (reuses `movie`, no reload).
         beam_mask_result = beam_mask_manager.estimate(movie=movie)
 
-        # 3. Prepare the movie for alignment (gain/dark correct, mean-zero), applying
+        # 3a. Prepare the movie for alignment (gain/dark correct, mean-zero), applying
         #    the beam mask as Poisson noise-fill outside the beam disk. Reuses `movie`
         #    again -- the movie is never read from disk a second time.
         prepared = align_manager.prepare_movie(
             movie=movie, mask=beam_mask_result.to_mask()
         )
+
+        # 3b. Crop down to the beam_mask_config.crop_bounds_config policy (a no-op
+        #     full-frame slice when that policy is "none"). Doing this before motion
+        #     estimation is what actually saves compute on the expensive step below.
+        prepared = crop_movie(prepared, *beam_mask_result.output_crop_bounds)
 
         # 4. Estimate motion: XC pre-pass seeds global shifts, then gradient
         #    optimizer refines at the configured deformation field resolution.
