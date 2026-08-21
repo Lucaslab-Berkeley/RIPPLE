@@ -4,6 +4,7 @@ import torch
 from pydantic import PositiveInt, field_validator
 from teamtomo_basemodel import BaseModelTeamTomo
 
+from ripple.core.crop_bounds import CropBounds
 from ripple.core.prepare_movie import DEFAULT_PREP_CHUNK_SIZE, prepare_movie
 from ripple.utils.data_io import load_tensor_from_path, render_eer_to_tensor
 
@@ -97,6 +98,7 @@ class MovieConfig(BaseModelTeamTomo):
         device: torch.device | str | None = None,
         storage_device: torch.device | str | None = None,
         chunk_size: int = DEFAULT_PREP_CHUNK_SIZE,
+        crop_bounds: CropBounds | None = None,
     ) -> torch.Tensor:
         """Apply gain, dark, hot-pixel, mask, and mean-zero corrections to a movie.
 
@@ -121,6 +123,10 @@ class MovieConfig(BaseModelTeamTomo):
             `device`.
         chunk_size : int
             Number of frames to transfer/correct at a time.
+        crop_bounds : CropBounds | None
+            Inclusive ``(min_y, max_y, min_x, max_x)`` crop bounds applied to `movie`,
+            `gain_map`, `dark_map`, and `mask` before any other preparation step. If
+            None, no cropping is applied.
 
         Returns
         -------
@@ -139,6 +145,7 @@ class MovieConfig(BaseModelTeamTomo):
             device=device,
             storage_device=storage_device,
             chunk_size=chunk_size,
+            crop_bounds=crop_bounds,
         )
 
     @property

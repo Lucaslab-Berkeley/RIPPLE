@@ -22,6 +22,9 @@ class CropBoundsConfig(BaseModelTeamTomo):
     round_to: int
         Multiple crop side lengths are rounded to. Only used when
         ``mode="nice_size"``. Default is 1 (no-op).
+    divisible_by: int
+        Side lengths are constrained to be an exact multiple of this value, typically a
+        movie's super-resolution factor.
     target_shape: tuple[int, int] | None
         ``(height, width)`` of the desired crop window. Required when
         ``mode="fixed_size"``, must be None otherwise. Default is None.
@@ -29,11 +32,12 @@ class CropBoundsConfig(BaseModelTeamTomo):
 
     mode: CropMode = "none"
     round_to: int = 1
+    divisible_by: int = 1
     target_shape: tuple[int, int] | None = None
 
     @model_validator(mode="after")  # type: ignore
     def validate_target_shape(self) -> Self:
-        """Ensure `target_shape` is set iff `mode` is 'fixed_size'.
+        """Ensure `target_shape` is set iff `mode` is 'fixed_size', and divisible.
 
         Returns
         -------
@@ -43,11 +47,24 @@ class CropBoundsConfig(BaseModelTeamTomo):
         Raises
         ------
         ValueError
-            If `target_shape` is missing while `mode='fixed_size'`, or set while
-            `mode!='fixed_size'`.
+            If `target_shape` is missing while `mode='fixed_size'`, set while
+            `mode!='fixed_size'`, or isn't an exact multiple of `divisible_by` in both
+            dimensions.
         """
         if self.mode == "fixed_size" and self.target_shape is None:
             raise ValueError("target_shape must be set when mode='fixed_size'.")
         if self.mode != "fixed_size" and self.target_shape is not None:
             raise ValueError("target_shape must be None unless mode='fixed_size'.")
+        if (
+            self.target_shape is not None
+            and self.divisible_by > 1
+            and (
+                self.target_shape[0] % self.divisible_by != 0
+                or self.target_shape[1] % self.divisible_by != 0
+            )
+        ):
+            raise ValueError(
+                f"target_shape {self.target_shape} is not an exact multiple of "
+                f"divisible_by ({self.divisible_by}) in both dimensions."
+            )
         return self

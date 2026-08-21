@@ -19,6 +19,7 @@ from ripple.config import (
     MovieConfig,
     OutputConfig,
 )
+from ripple.core.crop_bounds import CropBounds
 from ripple.managers import manager_utils
 
 
@@ -72,11 +73,12 @@ class AlignFramesManager(BaseModelTeamTomo):
         gain_map: torch.Tensor | None = None,
         dark_map: torch.Tensor | None = None,
         mask: torch.Tensor | None = None,
+        crop_bounds: CropBounds | None = None,
     ) -> torch.Tensor:
         """Load and prepare the movie (gain/dark correction, mask, mean-zero).
 
         Honors ``alignment_config.skip_movie_preparation``. When True, the loaded movie
-        is returned as-is with no gain/dark/mask/mean-zero correction applied.
+        is returned as-is with no gain/dark/mask/mean-zero/crop correction applied.
 
         Parameters
         ----------
@@ -92,6 +94,10 @@ class AlignFramesManager(BaseModelTeamTomo):
             Mask with shape (height, width) multiplied uniformly into every frame. If
             None, loaded from ``movie_config`` (or left unset if no ``mask_path`` is
             configured).
+        crop_bounds: CropBounds | None
+            Inclusive ``(min_y, max_y, min_x, max_x)`` crop bounds applied to the
+            movie, gain map, dark map, and mask before any other preparation step.
+            If None, no cropping is applied.
 
         Returns
         -------
@@ -115,6 +121,7 @@ class AlignFramesManager(BaseModelTeamTomo):
             mask,
             self.computational_config.gpu_device,
             storage_device=self.computational_config.movie_storage_device,
+            crop_bounds=crop_bounds,
         )
 
     def estimate_motion(

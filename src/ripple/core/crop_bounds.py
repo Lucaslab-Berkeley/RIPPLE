@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Literal, TypedDict
 
 import numpy as np
@@ -157,6 +158,7 @@ def determine_crop_bounds(
     mode: CropMode = "tight",
     round_to: int = 1,
     target_shape: tuple[int, int] | None = None,
+    divisible_by: int = 1,
 ) -> CropBounds:
     """Determine crop bounds for `mask` under the requested size policy.
 
@@ -185,17 +187,22 @@ def determine_crop_bounds(
     target_shape : tuple[int, int] | None
         ``(height, width)`` of the desired crop window. Required when
         ``mode="fixed_size"``, otherwise ignored.
+    divisible_by : int
+        Side lengths are constrained to be an exact multiple of this value. Default is 1
+        (no constraint). Ignored when ``mode="none"``.
 
     Returns
     -------
     CropBounds
-        Inclusive ``(min_y, max_y, min_x, max_x)`` crop bounds.
+        Inclusive ``(min_y, max_y, min_x, max_x)`` crop bounds, guaranteed to have side
+        lengths that are exact multiples of `divisible_by` (except in ``mode="none"``).
 
     Raises
     ------
     ValueError
-        If `mode` is ``"fixed_size"`` and `target_shape` is None or doesn't fit; if
-        `mask` has no True pixels; or if `mode` is not a recognised value.
+        If `mode` is ``"fixed_size"`` and `target_shape` is None, doesn't fit, or
+        isn't an exact multiple of `divisible_by`; if `mask` has no True pixels;
+        or if `mode` is not a recognised value.
     """
     height, width = mask.shape
 
@@ -205,12 +212,21 @@ def determine_crop_bounds(
     bounds = get_crop_bounds(mask)
 
     if mode == "tight":
-        pass
+        if divisible_by > 1:
+            bounds = _apply_round_to(bounds, divisible_by, (height, width))
     elif mode == "nice_size":
-        bounds = _apply_round_to(bounds, round_to, (height, width))
+        effective_round_to = math.lcm(round_to, divisible_by)
+        bounds = _apply_round_to(bounds, effective_round_to, (height, width))
     elif mode == "fixed_size":
         if target_shape is None:
             raise ValueError("target_shape must be set when mode='fixed_size'.")
+        if divisible_by > 1 and (
+            target_shape[0] % divisible_by != 0 or target_shape[1] % divisible_by != 0
+        ):
+            raise ValueError(
+                f"target_shape {target_shape} is not an exact multiple of "
+                f"divisible_by ({divisible_by}) in both dimensions."
+            )
         bounds = _apply_target_shape(bounds, target_shape, (height, width))
     else:
         raise ValueError(f"Unknown crop mode '{mode}'.")

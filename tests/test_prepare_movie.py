@@ -325,3 +325,85 @@ def test_prepare_movie_no_gain_no_dark(sample_movie):
     for frame_idx in range(result.shape[0]):
         frame_mean = torch.mean(result[frame_idx])
         assert torch.abs(frame_mean) < 1e-5
+
+
+# Tests for prepare_movie crop_bounds
+def test_prepare_movie_crop_bounds_none_is_noop(sample_movie):
+    """Test prepare_movie with crop_bounds=None leaves the frame shape unchanged."""
+    result = prepare_movie(
+        sample_movie,
+        gain_map=None,
+        dark_map=None,
+        gain_flip=0,
+        gain_rot=0,
+        multiply_gain=True,
+        crop_bounds=None,
+    )
+    assert result.shape == sample_movie.shape
+
+
+def test_prepare_movie_crop_bounds_crops_movie(
+    sample_movie, sample_gain_map, sample_dark_map
+):
+    """Test prepare_movie crops the movie (and gain/dark) to the requested bounds."""
+    crop_bounds = {"min_y": 4, "max_y": 19, "min_x": 8, "max_x": 23}
+
+    result = prepare_movie(
+        sample_movie,
+        gain_map=sample_gain_map,
+        dark_map=sample_dark_map,
+        gain_flip=0,
+        gain_rot=0,
+        multiply_gain=True,
+        crop_bounds=crop_bounds,
+    )
+
+    assert result.shape == (sample_movie.shape[0], 16, 16)
+
+
+def test_prepare_movie_crop_bounds_crops_mask(sample_movie):
+    """Test prepare_movie crops the mask to match the cropped movie before applying."""
+    mask = torch.zeros(32, 32, dtype=torch.float32)
+    mask[8:24, 8:24] = 1.0
+    crop_bounds = {"min_y": 4, "max_y": 19, "min_x": 8, "max_x": 23}
+
+    # Should not raise (mask is cropped to the same (16, 16) shape as the movie
+    # before apply_mask's shape check runs).
+    result = prepare_movie(
+        sample_movie,
+        gain_map=None,
+        dark_map=None,
+        gain_flip=0,
+        gain_rot=0,
+        multiply_gain=True,
+        mask=mask,
+        crop_bounds=crop_bounds,
+    )
+    assert result.shape == (sample_movie.shape[0], 16, 16)
+
+
+def test_prepare_movie_crop_bounds_matches_manual_crop(
+    sample_movie, sample_gain_map, sample_dark_map
+):
+    """Test crop_bounds gives the same result as manually cropping before preparing."""
+    crop_bounds = {"min_y": 4, "max_y": 19, "min_x": 8, "max_x": 23}
+
+    cropped_first = prepare_movie(
+        sample_movie[:, 4:20, 8:24],
+        gain_map=sample_gain_map[4:20, 8:24],
+        dark_map=sample_dark_map[4:20, 8:24],
+        gain_flip=0,
+        gain_rot=0,
+        multiply_gain=True,
+    )
+    cropped_via_param = prepare_movie(
+        sample_movie,
+        gain_map=sample_gain_map,
+        dark_map=sample_dark_map,
+        gain_flip=0,
+        gain_rot=0,
+        multiply_gain=True,
+        crop_bounds=crop_bounds,
+    )
+
+    assert torch.allclose(cropped_first, cropped_via_param)

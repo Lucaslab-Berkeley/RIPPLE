@@ -216,6 +216,46 @@ class TestPrepareMovie:
 
         assert torch.equal(result, raw_movie)
 
+    def test_crop_bounds_none_leaves_shape_unchanged(self, manager):
+        """With crop_bounds=None (the default), the frame shape is untouched."""
+        result = manager.prepare_movie()
+        assert result.shape == (N_FRAMES, HEIGHT, WIDTH)
+
+    def test_crop_bounds_crops_movie_gain_dark_and_mask(self, manager):
+        """crop_bounds crops the movie (and loaded gain/dark/mask) consistently."""
+        crop_bounds = {"min_y": 2, "max_y": 9, "min_x": 4, "max_x": 11}
+
+        result = manager.prepare_movie(crop_bounds=crop_bounds)
+
+        assert result.shape == (N_FRAMES, 8, 8)
+
+    def test_crop_bounds_applies_to_explicit_movie_tensor(self, manager):
+        """crop_bounds also crops an explicitly-provided movie tensor."""
+        raw_movie = torch.randn(3, HEIGHT, WIDTH)
+        crop_bounds = {"min_y": 0, "max_y": 7, "min_x": 0, "max_x": 7}
+
+        result = manager.prepare_movie(movie=raw_movie, crop_bounds=crop_bounds)
+
+        assert result.shape == (3, 8, 8)
+
+    def test_skip_movie_preparation_ignores_crop_bounds(
+        self, computational_config, movie_config, output_config
+    ):
+        """`skip_movie_preparation=True` bypasses cropping too."""
+        alignment_config = AlignFramesConfig(
+            deformation_field_resolution=(3, 2, 2),
+            skip_movie_preparation=True,
+        )
+        manager = _make_manager(
+            computational_config, movie_config, output_config, alignment_config
+        )
+        raw_movie = torch.randn(3, HEIGHT, WIDTH)
+        crop_bounds = {"min_y": 0, "max_y": 7, "min_x": 0, "max_x": 7}
+
+        result = manager.prepare_movie(movie=raw_movie, crop_bounds=crop_bounds)
+
+        assert torch.equal(result, raw_movie)
+
 
 # ---------------------------------------------------------------------------
 # _setup_estimation_kwargs

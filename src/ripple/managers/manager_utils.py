@@ -8,6 +8,7 @@ import torch
 from torch_motion_correction import DeformationField
 
 from ripple.core import fourier_crop_movie, generate_dose_weighted_image, sum_movie
+from ripple.core.crop_bounds import CropBounds
 from ripple.utils.data_io import (
     write_mrc_from_tensor,
     write_trajectory_to_csv,
@@ -134,6 +135,7 @@ def prepare_movie_if_needed(
     mask: torch.Tensor | None,
     device: torch.device,
     storage_device: torch.device | None = None,
+    crop_bounds: CropBounds | None = None,
 ) -> torch.Tensor:
     """Prepare the movie unless `alignment_config.skip_movie_preparation` is set.
 
@@ -156,6 +158,10 @@ def prepare_movie_if_needed(
     storage_device: torch.device | None
         Device the returned, fully-prepared movie is stored on. If None, defaults to
         `device`.
+    crop_bounds: CropBounds | None
+        Inclusive ``(min_y, max_y, min_x, max_x)`` crop bounds applied to `movie`,
+        `gain_map`, `dark_map`, and `mask` before any other preparation step. Ignored
+        if ``skip_movie_preparation`` is True. If None, no cropping is applied.
 
     Returns
     -------
@@ -172,6 +178,7 @@ def prepare_movie_if_needed(
         mask=mask,
         device=device,
         storage_device=storage_device,
+        crop_bounds=crop_bounds,
     )
 
 

@@ -326,6 +326,7 @@ def estimate_beam_mask(
     device: torch.device | str | None = None,
     crop_mode: CropMode = "none",
     crop_round_to: int = 1,
+    crop_divisible_by: int = 1,
     crop_target_shape: tuple[int, int] | None = None,
 ) -> BeamMaskParams:
     """Estimate a DeCo-LACE beam mask ellipse from a raw frame sum.
@@ -358,6 +359,10 @@ def estimate_beam_mask(
     crop_round_to : int
         Multiple to round output crop side lengths to. Only used when
         ``crop_mode="nice_size"``. Default is 1 (no-op).
+    crop_divisible_by : int
+        Output crop side lengths are constrained to be an exact multiple of this value.
+        typically a movie's super-resolution factor. Default is 1 (no constraint). See
+        :func:`~ripple.core.crop_bounds.determine_crop_bounds`.
     crop_target_shape : tuple[int, int] | None
         ``(height, width)`` of the desired output crop window. Required when
         ``crop_mode="fixed_size"``. Default is None.
@@ -407,6 +412,7 @@ def estimate_beam_mask(
         mode=crop_mode,
         round_to=crop_round_to,
         target_shape=crop_target_shape,
+        divisible_by=crop_divisible_by,
     )
 
     return {

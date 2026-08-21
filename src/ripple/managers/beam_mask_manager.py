@@ -56,5 +56,6 @@ class BeamMaskManager(BaseModelTeamTomo):
             crop_mode=crop_bounds_config.mode,
             crop_round_to=crop_bounds_config.round_to,
             crop_target_shape=crop_bounds_config.target_shape,
+            crop_divisible_by=crop_bounds_config.divisible_by,
         )
         return BeamMaskResult(**result_dict)

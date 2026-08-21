@@ -11,6 +11,7 @@ from ripple.config import (
     AlignFramesConfig,
     BeamMaskConfig,
     ComputationalConfig,
+    CropBoundsConfig,
     MovieConfig,
     OutputConfig,
 )
@@ -110,6 +111,30 @@ class TestEstimate:
         intersection = np.logical_and(recovered, ellipse_mask).sum()
         assert intersection / recovered.sum() > 0.9
 
+    def test_output_crop_bounds_respect_divisible_by(
+        self, computational_config, movie_config
+    ):
+        # super_resolution_factor=3 is not a divisor of the tight bbox's natural
+        # size for this ellipse -- crop_bounds_config.divisible_by must still
+        # force both output crop side lengths to a multiple of 3.
+        beam_mask_config = BeamMaskConfig(
+            diameter_reduction=0.05,
+            low_pass_resolution=10.0,
+            crop_bounds_config=CropBoundsConfig(mode="tight", divisible_by=3),
+        )
+        manager = BeamMaskManager(
+            computational_config=computational_config,
+            movie_config=movie_config,
+            beam_mask_config=beam_mask_config,
+        )
+
+        result = manager.estimate()
+
+        output_height = result.output_crop_max_y - result.output_crop_min_y + 1
+        output_width = result.output_crop_max_x - result.output_crop_min_x + 1
+        assert output_height % 3 == 0
+        assert output_width % 3 == 0
+
 
 class TestSharedTensorComposition:
     """Verify a single loaded movie tensor composes with AlignFramesManager."""
@@ -142,3 +167,52 @@ class TestSharedTensorComposition:
         )
 
         assert prepared.shape == movie.shape
+
+    def test_output_crop_bounds_feed_align_frames_manager_crop(
+        self, computational_config, movie_config, movie_array
+    ):
+        """The beam mask's output_crop_* bounds physically crop the movie."""
+        beam_mask_config = BeamMaskConfig(
+            diameter_reduction=0.05,
+            low_pass_resolution=10.0,
+            crop_bounds_config=CropBoundsConfig(mode="tight"),
+        )
+        beam_mask_manager = BeamMaskManager(
+            computational_config=computational_config,
+            movie_config=movie_config,
+            beam_mask_config=beam_mask_config,
+        )
+        movie = torch.from_numpy(movie_array)
+        beam_mask_result = beam_mask_manager.estimate(movie=movie)
+
+        align_movie_config = MovieConfig(
+            pixel_size=1.0, fluence=40.0, fluence_per_frame=10.0, mask_fill_noise=True
+        )
+        align_manager = AlignFramesManager(
+            computational_config=computational_config,
+            movie_config=align_movie_config,
+            output_config=OutputConfig(),
+            alignment_config=AlignFramesConfig(
+                deformation_field_resolution=(N_FRAMES, 2, 2), max_iterations=1
+            ),
+        )
+
+        prepared = align_manager.prepare_movie(
+            movie=movie,
+            mask=beam_mask_result.to_mask(),
+            crop_bounds={
+                "min_y": beam_mask_result.output_crop_min_y,
+                "max_y": beam_mask_result.output_crop_max_y,
+                "min_x": beam_mask_result.output_crop_min_x,
+                "max_x": beam_mask_result.output_crop_max_x,
+            },
+        )
+
+        expected_h = (
+            beam_mask_result.output_crop_max_y - beam_mask_result.output_crop_min_y + 1
+        )
+        expected_w = (
+            beam_mask_result.output_crop_max_x - beam_mask_result.output_crop_min_x + 1
+        )
+        assert prepared.shape == (N_FRAMES, expected_h, expected_w)
+        assert (expected_h, expected_w) != (HEIGHT, WIDTH)

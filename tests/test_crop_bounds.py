@@ -142,6 +142,70 @@ class TestDetermineCropBounds:
 
 
 # ---------------------------------------------------------------------------
+# determine_crop_bounds -- divisible_by (super-resolution factor constraint)
+# ---------------------------------------------------------------------------
+
+
+class TestDetermineCropBoundsDivisibleBy:
+    """Tests for the divisible_by constraint (typically a super-resolution factor)."""
+
+    def test_divisible_by_one_is_noop_for_tight(self, solid_mask):
+        # solid_mask's tight bbox is (10, 19, 15, 34) -> shape (10, 20), already
+        # sanity-checked against get_crop_bounds elsewhere in this file.
+        bounds = determine_crop_bounds(solid_mask, mode="tight", divisible_by=1)
+        assert bounds == determine_crop_bounds(solid_mask, mode="tight")
+
+    def test_tight_grows_to_multiple_of_divisible_by(self, solid_mask):
+        # Tight bbox height=10 is already a multiple of 4; width=20 isn't a
+        # multiple of 3, so only the width should grow.
+        bounds = determine_crop_bounds(solid_mask, mode="tight", divisible_by=3)
+        height = bounds["max_y"] - bounds["min_y"] + 1
+        width = bounds["max_x"] - bounds["min_x"] + 1
+        assert height % 3 == 0
+        assert width % 3 == 0
+        tight = get_crop_bounds(solid_mask)
+        assert bounds["min_y"] <= tight[0] and bounds["max_y"] >= tight[1]
+        assert bounds["min_x"] <= tight[2] and bounds["max_x"] >= tight[3]
+
+    def test_nice_size_satisfies_both_round_to_and_divisible_by(self, solid_mask):
+        # round_to=8 and divisible_by=3 are coprime -- growing to a multiple of
+        # just one would not satisfy the other, so the result must be a multiple
+        # of lcm(8, 3) = 24 to satisfy both simultaneously. (Chosen small enough,
+        # relative to the 40x50 frame, to grow without hitting the frame edge.)
+        bounds = determine_crop_bounds(
+            solid_mask, mode="nice_size", round_to=8, divisible_by=3
+        )
+        height = bounds["max_y"] - bounds["min_y"] + 1
+        width = bounds["max_x"] - bounds["min_x"] + 1
+        assert height % 8 == 0
+        assert height % 3 == 0
+        assert width % 8 == 0
+        assert width % 3 == 0
+
+    def test_fixed_size_accepts_divisible_target_shape(self, solid_mask):
+        bounds = determine_crop_bounds(
+            solid_mask, mode="fixed_size", target_shape=(20, 30), divisible_by=2
+        )
+        assert bounds["max_y"] - bounds["min_y"] + 1 == 20
+        assert bounds["max_x"] - bounds["min_x"] + 1 == 30
+
+    def test_fixed_size_rejects_non_divisible_target_shape(self, solid_mask):
+        # 30 is not a multiple of 4 -- must fail loudly rather than silently
+        # grow past the caller's explicit fixed_size request.
+        with pytest.raises(ValueError, match="not an exact multiple of"):
+            determine_crop_bounds(
+                solid_mask, mode="fixed_size", target_shape=(20, 30), divisible_by=4
+            )
+
+    def test_mode_none_ignores_divisible_by(self, solid_mask):
+        # "none" always spans the full (odd-or-not) frame; divisible_by is not a
+        # cropping decision in this mode.
+        bounds = determine_crop_bounds(solid_mask, mode="none", divisible_by=7)
+        assert (bounds["min_y"], bounds["max_y"]) == (0, HEIGHT - 1)
+        assert (bounds["min_x"], bounds["max_x"]) == (0, WIDTH - 1)
+
+
+# ---------------------------------------------------------------------------
 # crop_movie
 # ---------------------------------------------------------------------------
 

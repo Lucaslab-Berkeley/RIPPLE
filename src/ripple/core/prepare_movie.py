@@ -3,6 +3,8 @@
 import torch
 import torch.nn.functional as F
 
+from ripple.core.crop_bounds import CropBounds, crop_movie
+
 # Number of frames transferred to `device` and corrected at a time
 DEFAULT_PREP_CHUNK_SIZE = 8
 
@@ -25,6 +27,7 @@ def prepare_movie(
     device: torch.device | str | None = None,
     storage_device: torch.device | str | None = None,
     chunk_size: int = DEFAULT_PREP_CHUNK_SIZE,
+    crop_bounds: CropBounds | None = None,
 ) -> torch.Tensor:
     """Prepare the movie for alignment.
 
@@ -60,12 +63,25 @@ def prepare_movie(
         `device` (or `movie`'s device if `device` is also None).
     chunk_size: int
         Number of frames to transfer/correct at a time.
+    crop_bounds: CropBounds | None
+        Inclusive ``(min_y, max_y, min_x, max_x)`` crop bounds applied to `movie`,
+        `gain_map`, `dark_map`, and `mask` before any other preparation step. If
+        None, no cropping is applied.
 
     Returns
     -------
     torch.Tensor
     The prepared movie.
     """
+    if crop_bounds is not None:
+        movie = crop_movie(movie, **crop_bounds)
+        if gain_map is not None:
+            gain_map = crop_movie(gain_map, **crop_bounds)
+        if dark_map is not None:
+            dark_map = crop_movie(dark_map, **crop_bounds)
+        if mask is not None:
+            mask = crop_movie(mask, **crop_bounds)
+
     compute_device = torch.device(device) if device is not None else movie.device
     target_device = (
         torch.device(storage_device) if storage_device is not None else compute_device
