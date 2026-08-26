@@ -402,7 +402,7 @@ def optimize_sigmas_2dtm_nelder_mead(
         - "best_sigma_iter": iteration with best validation loss
         - "best_sigma_params": best sigma parameters found
     """
-    torch.set_grad_enabled(True)
+    torch.set_grad_enabled(True)  # NOTE: replace with `torch.enable_grad()`
     temp_dir = Path(tempfile.mkdtemp(prefix="ripple_sigma_opt_nelder_"))
 
     (
@@ -963,7 +963,7 @@ def optimize_sigmas_2dtm_optuna(
     """
     print("Optimizing sigmas using Optuna...")
 
-    torch.set_grad_enabled(True)
+    torch.set_grad_enabled(True)  # NOTE: replace with `torch.enable_grad()`
     temp_dir = Path(tempfile.mkdtemp(prefix="ripple_sigma_opt_optuna_"))
 
     (

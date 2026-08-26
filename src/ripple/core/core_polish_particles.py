@@ -347,7 +347,7 @@ def estimate_local_motion_2dtm_bayesian(
         to (y, x) shifts, and an OptimizationTracker containing the optimization
         history.
     """
-    torch.set_grad_enabled(True)
+    torch.set_grad_enabled(True)  # NOTE: replace with `torch.enable_grad()`
 
     # Setup common parameters for motion estimation
     setup_result = _setup_estimate_motion(
@@ -645,7 +645,7 @@ def estimate_local_motion_2dtm_particles_bayesian(
         to (y, x) shifts, and an OptimizationTracker containing the optimization
         history.
     """
-    torch.set_grad_enabled(True)
+    torch.set_grad_enabled(True)  # NOTE: replace with `torch.enable_grad()`
 
     # Create temporary directory for filtering and batch configs
     temp_dir = Path(tempfile.mkdtemp(prefix="ripple_batch_"))

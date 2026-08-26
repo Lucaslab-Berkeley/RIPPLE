@@ -173,8 +173,8 @@ class AlignFramesManager(BaseModelTeamTomo):
             )
 
         kwargs = self._setup_estimation_kwargs(movie, initial_deformation_field)
-        torch.set_grad_enabled(True)
-        return estimate_local_motion(**kwargs)  # type: ignore[no-any-return]
+        with torch.enable_grad():
+            return estimate_local_motion(**kwargs)  # type: ignore[no-any-return]
 
     def correct_and_save(
         self,
