@@ -143,6 +143,10 @@ testpaths = ["tests"]
 filterwarnings = [
     "error",
     "ignore:`torch.jit.script_method` is deprecated:DeprecationWarning",
+    # mrcfile 1.5.4 sets ndarray.dtype directly when reading MRC headers, which
+    # numpy >=2.5 deprecates. No fixed mrcfile release exists yet; remove this
+    # once mrcfile stops triggering the warning.
+    "ignore:Setting the dtype on a NumPy array has been deprecated:DeprecationWarning",
 ]
 
 # https://mypy.readthedocs.io/en/stable/config_file.html

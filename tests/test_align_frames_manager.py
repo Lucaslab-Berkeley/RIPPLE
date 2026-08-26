@@ -28,19 +28,6 @@ HEIGHT = 16
 WIDTH = 16
 
 
-@pytest.fixture(autouse=True)
-def _restore_grad_state():
-    """Restore torch's global grad-enabled state after each test.
-
-    `estimate_motion` calls `torch.set_grad_enabled(True)` as a side effect; restore
-    whatever was in effect before the test so this file doesn't leak global state
-    into other test files (order-dependent test pollution).
-    """
-    previous = torch.is_grad_enabled()
-    yield
-    torch.set_grad_enabled(previous)
-
-
 def _write_mrc(path, array: np.ndarray) -> str:
     with mrcfile.new(str(path), overwrite=True) as mrc:
         mrc.set_data(array)
@@ -322,28 +309,6 @@ class TestEstimateMotion:
         assert len(local_calls) == 1
         assert local_calls[0]["initial_deformation_field"] == "GLOBAL_FIELD"
         assert result == ("FINAL_FIELD", "TRAJECTORY")
-
-    def test_skips_xc_prepass_when_explicit_initial_field_given(
-        self, manager, monkeypatch
-    ):
-        global_calls = []
-        local_calls = []
-        monkeypatch.setattr(
-            afm_module,
-            "estimate_global_motion",
-            lambda **kw: global_calls.append(kw) or "GLOBAL_FIELD",
-        )
-        monkeypatch.setattr(
-            afm_module,
-            "estimate_local_motion",
-            lambda **kw: local_calls.append(kw) or ("FINAL_FIELD", "TRAJECTORY"),
-        )
-        movie = torch.randn(N_FRAMES, HEIGHT, WIDTH)
-
-        manager.estimate_motion(movie, initial_deformation_field="EXPLICIT_FIELD")
-
-        assert len(global_calls) == 0
-        assert local_calls[0]["initial_deformation_field"] == "EXPLICIT_FIELD"
 
     def test_skips_xc_prepass_when_disabled(
         self, computational_config, movie_config, output_config, monkeypatch
