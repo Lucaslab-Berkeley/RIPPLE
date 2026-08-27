@@ -42,9 +42,9 @@ def prepare_movie(
         The dark map to apply to the movie. If None, the dark map will be
         initialized to zero.
     gain_flip: int
-        The flip to apply to the gain map.
+        Flip applied to gain and dark reference maps (0 = none, 1 = flipY, 2 = flipX).
     gain_rot: int
-        The rotation to apply to the gain map.
+        Rotation applied to gain and dark reference maps (0–3, CCW quarter turns).
     multiply_gain: bool = True
         Whether to multiply the movie by the gain map or divide the movie by the
         gain map.
@@ -65,14 +65,24 @@ def prepare_movie(
         Number of frames to transfer/correct at a time.
     crop_bounds: CropBounds | None
         Inclusive ``(min_y, max_y, min_x, max_x)`` crop bounds applied to `movie`,
-        `gain_map`, `dark_map`, and `mask` before any other preparation step. If
-        None, no cropping is applied.
+        `gain_map`, `dark_map`, and `mask` after any gain/dark reference flip/rotation.
+        If None, no cropping is applied.
 
     Returns
     -------
     torch.Tensor
     The prepared movie.
     """
+    prep_gain_flip = gain_flip
+    prep_gain_rot = gain_rot
+    if gain_flip != 0 or gain_rot != 0:
+        if gain_map is not None:
+            gain_map = transform_reference_map(gain_map, gain_flip, gain_rot)
+        if dark_map is not None:
+            dark_map = transform_reference_map(dark_map, gain_flip, gain_rot)
+        prep_gain_flip = 0
+        prep_gain_rot = 0
+
     if crop_bounds is not None:
         movie = crop_movie(movie, crop_bounds)
         if gain_map is not None:
@@ -95,7 +105,9 @@ def prepare_movie(
     for start in range(0, n_frames, chunk_size):
         end = min(start + chunk_size, n_frames)
         chunk = movie[start:end].to(device=compute_device, dtype=torch.float32)
-        chunk = apply_gain(chunk, gain_map, gain_flip, gain_rot, multiply_gain)
+        chunk = apply_gain(
+            chunk, gain_map, prep_gain_flip, prep_gain_rot, multiply_gain
+        )
         chunk = apply_dark(chunk, dark_map)
         chunk = remove_hot_pixels(chunk)
         chunk = apply_mask(chunk, mask, fill_noise=mask_fill_noise)
@@ -104,6 +116,38 @@ def prepare_movie(
         prepared[start:end] = chunk.to(target_device)
 
     return prepared
+
+
+def transform_reference_map(
+    reference_map: torch.Tensor,
+    gain_flip: int,
+    gain_rot: int,
+) -> torch.Tensor:
+    """Flip and rotate a gain or dark reference so it aligns with the movie grid.
+
+    Parameters
+    ----------
+    reference_map : torch.Tensor
+        2-D reference map with shape ``(height, width)`` (gain or dark).
+    gain_flip : int
+        Flip to apply: 0 = none, 1 = flipY, 2 = flipX.
+    gain_rot : int
+        Rotation to apply: 0 = none, 1 = 90°, 2 = 180°, 3 = 270° (CCW).
+
+    Returns
+    -------
+    torch.Tensor
+        Transformed reference map, same dtype/device as the input.
+    """
+    if gain_flip == 1:
+        reference_map = reference_map.flip(0)  # flipY
+    elif gain_flip == 2:
+        reference_map = reference_map.flip(1)  # flipX
+
+    if gain_rot != 0:
+        reference_map = torch.rot90(reference_map, k=-gain_rot)
+
+    return reference_map
 
 
 def apply_gain(
@@ -142,20 +186,11 @@ def apply_gain(
     torch.Tensor
         The movie with the gain map applied, or the original movie if gain_map is None.
     """
-    # If gain_map is None, return the movie unchanged
     if gain_map is None:
         return movie
 
     gain_map = gain_map.to(device=movie.device, dtype=movie.dtype)
-
-    # Apply transformations to gain map
-    if gain_flip == 1:
-        gain_map = gain_map.flip(0)  # flipY
-    elif gain_flip == 2:
-        gain_map = gain_map.flip(1)  # flipX
-
-    if gain_rot != 0:
-        gain_map = torch.rot90(gain_map, k=-gain_rot)
+    gain_map = transform_reference_map(gain_map, gain_flip, gain_rot)
 
     if multiply_gain:
         return movie * gain_map

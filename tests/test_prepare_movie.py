@@ -12,6 +12,7 @@ from ripple.core.prepare_movie import (
     apply_mask,
     prepare_movie,
     remove_hot_pixels,
+    transform_reference_map,
 )
 
 
@@ -407,3 +408,33 @@ def test_prepare_movie_crop_bounds_matches_manual_crop(
     )
 
     assert torch.allclose(cropped_first, cropped_via_param)
+
+
+def test_prepare_movie_crop_bounds_applies_reference_flip_before_crop(sample_movie):
+    """Gain/dark flip/rot must run on full references, then crop — not crop then flip."""
+    crop_bounds = {"min_y": 4, "max_y": 19, "min_x": 8, "max_x": 23}
+    # Row-dependent maps so crop-then-flip would not match flip-then-crop.
+    gain_map = torch.arange(32 * 32, dtype=torch.float32).reshape(32, 32)
+    dark_map = torch.arange(32 * 32, dtype=torch.float32).reshape(32, 32) + 1000.0
+
+    gain_aligned = transform_reference_map(gain_map, gain_flip=1, gain_rot=0)
+    dark_aligned = transform_reference_map(dark_map, gain_flip=1, gain_rot=0)
+    reference = prepare_movie(
+        sample_movie[:, 4:20, 8:24],
+        gain_map=gain_aligned[4:20, 8:24],
+        dark_map=dark_aligned[4:20, 8:24],
+        gain_flip=0,
+        gain_rot=0,
+        multiply_gain=True,
+    )
+    result = prepare_movie(
+        sample_movie,
+        gain_map=gain_map,
+        dark_map=dark_map,
+        gain_flip=1,
+        gain_rot=0,
+        multiply_gain=True,
+        crop_bounds=crop_bounds,
+    )
+
+    assert torch.allclose(reference, result)
