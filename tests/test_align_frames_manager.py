@@ -368,6 +368,28 @@ class TestEstimateMotion:
 
         assert result == ("FINAL_FIELD", "TRAJECTORY")
 
+    def test_raises_when_xc_prepass_and_explicit_initial_field_given(self, manager):
+        # manager's alignment_config defaults to use_xc_prepass=True.
+        movie = torch.randn(N_FRAMES, HEIGHT, WIDTH)
+
+        with pytest.raises(ValueError, match="Cannot use both"):
+            manager.estimate_motion(movie, initial_deformation_field=object())
+
+    def test_raises_when_xc_prepass_and_deformation_field_path_configured(
+        self, manager, monkeypatch
+    ):
+        # The config-path case (no explicit argument) must raise too -- previously
+        # this was silently ignored: XC ran and the configured field was dropped.
+        monkeypatch.setattr(
+            type(manager.alignment_config),
+            "initial_deformation_field",
+            property(lambda self: "CONFIG_FIELD"),
+        )
+        movie = torch.randn(N_FRAMES, HEIGHT, WIDTH)
+
+        with pytest.raises(ValueError, match="Cannot use both"):
+            manager.estimate_motion(movie)
+
 
 # ---------------------------------------------------------------------------
 # correct_and_save

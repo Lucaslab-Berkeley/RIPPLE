@@ -150,15 +150,28 @@ class AlignFramesManager(BaseModelTeamTomo):
         -------
         tuple[DeformationField, OptimizationTracker]
             Estimated deformation field and optimization history.
+
+        Raises
+        ------
+        ValueError
+            If ``use_xc_prepass`` is True and an initial deformation field is
+            also given, whether passed explicitly via `initial_deformation_field`
+            or loaded from ``alignment_config.deformation_field_path``.
         """
-        # Check only one of 'use_xc_prepass' and 'initial_deformation_field' is not None
+        initial_deformation_field = (
+            initial_deformation_field
+            if initial_deformation_field is not None
+            else self.alignment_config.initial_deformation_field
+        )
         if (
             self.alignment_config.use_xc_prepass
             and initial_deformation_field is not None
         ):
             raise ValueError(
-                "Cannot use both 'use_xc_prepass' and 'initial_deformation_field'. "
-                "Select only one (or neither) of them to pre-seed optimization stage."
+                "Cannot use both 'use_xc_prepass' and an initial deformation field "
+                "(whether passed explicitly or via "
+                "'alignment_config.deformation_field_path'). Select only one (or "
+                "neither) of them to pre-seed the optimization stage."
             )
 
         device = self.computational_config.gpu_device
