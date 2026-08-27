@@ -217,14 +217,16 @@ class TestCropMovie:
         movie = torch.arange(3 * HEIGHT * WIDTH, dtype=torch.float32).reshape(
             3, HEIGHT, WIDTH
         )
-        cropped = crop_movie(movie, 10, 19, 15, 34)
+        bounds = {"min_y": 10, "max_y": 19, "min_x": 15, "max_x": 34}
+        cropped = crop_movie(movie, bounds)
 
         assert cropped.shape == (3, 10, 20)
         assert torch.equal(cropped, movie[:, 10:20, 15:35])
 
     def test_crops_single_frame(self):
         frame = torch.arange(HEIGHT * WIDTH, dtype=torch.float32).reshape(HEIGHT, WIDTH)
-        cropped = crop_movie(frame, 0, 4, 0, 4)
+        bounds = {"min_y": 0, "max_y": 4, "min_x": 0, "max_x": 4}
+        cropped = crop_movie(frame, bounds)
 
         assert cropped.shape == (5, 5)
         assert torch.equal(cropped, frame[0:5, 0:5])

@@ -1,10 +1,11 @@
 """Configuration for cropping movie frames down to (a region around) a mask."""
 
+import numpy as np
 from pydantic import model_validator
 from teamtomo_basemodel import BaseModelTeamTomo
 from typing_extensions import Self
 
-from ripple.core.crop_bounds import CropMode
+from ripple.core.crop_bounds import CropBounds, CropMode, determine_crop_bounds
 
 
 class CropBoundsConfig(BaseModelTeamTomo):
@@ -15,10 +16,9 @@ class CropBoundsConfig(BaseModelTeamTomo):
     mode: Literal["none", "tight", "nice_size", "fixed_size"]
         Crop size policy. ``"none"`` (default) disables cropping entirely. ``"tight"``
         crops to the smallest bounding box containing the mask. ``"nice_size"`` grows
-        (or, for masks with excluded interior areas, shrinks) the tight crop so each
-        side is a multiple of `round_to` -- useful for FFT-friendly sizes.
-        ``"fixed_size"`` crops to an exact `target_shape` window centered on the mask
-        -- useful for giving every micrograph in a collection the same output size.
+        the tight crop so each side is a multiple of `round_to` -- useful for FFT
+        friendly sizes. ``"fixed_size"`` crops to an exact `target_shape` window
+        centered on the mask.
     round_to: int
         Multiple crop side lengths are rounded to. Only used when
         ``mode="nice_size"``. Default is 1 (no-op).
@@ -68,3 +68,18 @@ class CropBoundsConfig(BaseModelTeamTomo):
                 f"divisible_by ({self.divisible_by}) in both dimensions."
             )
         return self
+
+    def determine_bounds(self, mask: np.ndarray) -> CropBounds:
+        """Determine crop bounds for `mask` under this policy.
+
+        Parameters
+        ----------
+        mask : np.ndarray
+            Boolean 2-D array.
+
+        Returns
+        -------
+        CropBounds
+            See :func:`~ripple.core.crop_bounds.determine_crop_bounds`.
+        """
+        return determine_crop_bounds(mask, **self.model_dump())

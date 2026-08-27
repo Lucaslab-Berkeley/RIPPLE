@@ -258,56 +258,6 @@ class TestEstimateBeamMask:
         assert result["diameter_reduction"] == 0.1
         assert 0 <= result["crop_min_y"] < result["crop_max_y"] < HEIGHT
         assert 0 <= result["crop_min_x"] < result["crop_max_x"] < WIDTH
-        # Default crop_mode="none": output bounds span the full frame.
-        assert (result["output_crop_min_y"], result["output_crop_max_y"]) == (
-            0,
-            HEIGHT - 1,
-        )
-        assert (result["output_crop_min_x"], result["output_crop_max_x"]) == (
-            0,
-            WIDTH - 1,
-        )
-
-    def test_crop_mode_tight_matches_tight_crop_bounds(self, ellipse_mask):
-        frame_sum = torch.from_numpy(ellipse_mask.astype(np.float32)) * 100.0
-
-        result = estimate_beam_mask(
-            frame_sum,
-            pixel_size=1.0,
-            threshold_method="otsu",
-            diameter_reduction=0.1,
-            low_pass_resolution=10.0,
-            device=torch.device("cpu"),
-            crop_mode="tight",
-        )
-
-        assert (result["output_crop_min_y"], result["output_crop_max_y"]) == (
-            result["crop_min_y"],
-            result["crop_max_y"],
-        )
-        assert (result["output_crop_min_x"], result["output_crop_max_x"]) == (
-            result["crop_min_x"],
-            result["crop_max_x"],
-        )
-
-    def test_crop_mode_nice_size_rounds_output_bounds(self, ellipse_mask):
-        frame_sum = torch.from_numpy(ellipse_mask.astype(np.float32)) * 100.0
-
-        result = estimate_beam_mask(
-            frame_sum,
-            pixel_size=1.0,
-            threshold_method="otsu",
-            diameter_reduction=0.1,
-            low_pass_resolution=10.0,
-            device=torch.device("cpu"),
-            crop_mode="nice_size",
-            crop_round_to=16,
-        )
-
-        height = result["output_crop_max_y"] - result["output_crop_min_y"] + 1
-        width = result["output_crop_max_x"] - result["output_crop_min_x"] + 1
-        assert height % 16 == 0
-        assert width % 16 == 0
 
     def test_raises_on_unsupported_threshold_method(self, ellipse_mask):
         frame_sum = torch.from_numpy(ellipse_mask.astype(np.float32)) * 100.0

@@ -7,6 +7,7 @@ from teamtomo_basemodel import BaseModelTeamTomo
 
 from ripple.config.crop_bounds_config import CropBoundsConfig
 from ripple.core.beam_mask import make_ellipse_mask
+from ripple.core.crop_bounds import CropBounds
 
 
 class BeamMaskConfig(BaseModelTeamTomo):
@@ -104,18 +105,23 @@ class BeamMaskResult(BaseModelTeamTomo):
     pixel_size: float
 
     @property
-    def crop_bounds(self) -> tuple[int, int, int, int]:
-        """Tight bounding box as ``(min_y, max_y, min_x, max_x)``."""
-        return self.crop_min_y, self.crop_max_y, self.crop_min_x, self.crop_max_x
+    def crop_bounds(self) -> CropBounds:
+        """Tight bounding box as a CropBounds dict."""
+        return CropBounds(
+            min_y=self.crop_min_y,
+            max_y=self.crop_max_y,
+            min_x=self.crop_min_x,
+            max_x=self.crop_max_x,
+        )
 
     @property
-    def output_crop_bounds(self) -> tuple[int, int, int, int]:
-        """Requested output crop region as ``(min_y, max_y, min_x, max_x)``."""
-        return (
-            self.output_crop_min_y,
-            self.output_crop_max_y,
-            self.output_crop_min_x,
-            self.output_crop_max_x,
+    def output_crop_bounds(self) -> CropBounds:
+        """Requested output crop region as a CropBounds dict."""
+        return CropBounds(
+            min_y=self.output_crop_min_y,
+            max_y=self.output_crop_max_y,
+            min_x=self.output_crop_min_x,
+            max_x=self.output_crop_max_x,
         )
 
     def to_mask(self) -> torch.Tensor:

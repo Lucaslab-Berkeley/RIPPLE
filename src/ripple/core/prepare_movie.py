@@ -74,13 +74,13 @@ def prepare_movie(
     The prepared movie.
     """
     if crop_bounds is not None:
-        movie = crop_movie(movie, **crop_bounds)
+        movie = crop_movie(movie, crop_bounds)
         if gain_map is not None:
-            gain_map = crop_movie(gain_map, **crop_bounds)
+            gain_map = crop_movie(gain_map, crop_bounds)
         if dark_map is not None:
-            dark_map = crop_movie(dark_map, **crop_bounds)
+            dark_map = crop_movie(dark_map, crop_bounds)
         if mask is not None:
-            mask = crop_movie(mask, **crop_bounds)
+            mask = crop_movie(mask, crop_bounds)
 
     compute_device = torch.device(device) if device is not None else movie.device
     target_device = (

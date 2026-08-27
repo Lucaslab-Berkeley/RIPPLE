@@ -12,7 +12,11 @@ from ripple.config import (
     ComputationalConfig,
     MovieConfig,
 )
-from ripple.core.beam_mask import estimate_beam_mask, sum_movie_chunked
+from ripple.core.beam_mask import (
+    estimate_beam_mask,
+    make_ellipse_mask,
+    sum_movie_chunked,
+)
 
 
 class BeamMaskManager(BaseModelTeamTomo):
@@ -45,7 +49,6 @@ class BeamMaskManager(BaseModelTeamTomo):
         device = self.computational_config.gpu_device
         frame_sum = sum_movie_chunked(movie, device=device)
 
-        crop_bounds_config = self.beam_mask_config.crop_bounds_config
         result_dict = estimate_beam_mask(
             frame_sum,
             self.movie_config.pixel_size,
@@ -53,9 +56,25 @@ class BeamMaskManager(BaseModelTeamTomo):
             self.beam_mask_config.diameter_reduction,
             self.beam_mask_config.low_pass_resolution,
             device=device,
-            crop_mode=crop_bounds_config.mode,
-            crop_round_to=crop_bounds_config.round_to,
-            crop_target_shape=crop_bounds_config.target_shape,
-            crop_divisible_by=crop_bounds_config.divisible_by,
         )
-        return BeamMaskResult(**result_dict)
+
+        ellipse_mask = make_ellipse_mask(
+            shape=(result_dict["image_shape_y"], result_dict["image_shape_x"]),
+            center_y=result_dict["center_y"],
+            center_x=result_dict["center_x"],
+            axis1=result_dict["axis1"],
+            axis2=result_dict["axis2"],
+            angle_deg=result_dict["angle_deg"],
+            diameter_reduction=result_dict["diameter_reduction"],
+        )
+        output_bounds = self.beam_mask_config.crop_bounds_config.determine_bounds(
+            ellipse_mask
+        )
+
+        return BeamMaskResult(
+            **result_dict,
+            output_crop_min_y=output_bounds["min_y"],
+            output_crop_max_y=output_bounds["max_y"],
+            output_crop_min_x=output_bounds["min_x"],
+            output_crop_max_x=output_bounds["max_x"],
+        )

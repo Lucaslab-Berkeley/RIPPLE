@@ -235,9 +235,7 @@ def determine_crop_bounds(
     return CropBounds(min_y=min_y, max_y=max_y, min_x=min_x, max_x=max_x)
 
 
-def crop_movie(
-    movie: torch.Tensor, min_y: int, max_y: int, min_x: int, max_x: int
-) -> torch.Tensor:
+def crop_movie(movie: torch.Tensor, bounds: CropBounds) -> torch.Tensor:
     """Crop the trailing (height, width) dimensions of `movie` to inclusive bounds.
 
     Parameters
@@ -245,7 +243,7 @@ def crop_movie(
     movie : torch.Tensor
         Tensor with shape ``(..., height, width)``, e.g. ``(n_frames, height, width)``
         or ``(height, width)``.
-    min_y, max_y, min_x, max_x : int
+    bounds : CropBounds
         Inclusive crop bounds, e.g. from :func:`determine_crop_bounds`.
 
     Returns
@@ -253,4 +251,8 @@ def crop_movie(
     torch.Tensor
         A view into `movie` cropped to the requested region.
     """
-    return movie[..., min_y : max_y + 1, min_x : max_x + 1]
+    return movie[
+        ...,
+        bounds["min_y"] : bounds["max_y"] + 1,
+        bounds["min_x"] : bounds["max_x"] + 1,
+    ]

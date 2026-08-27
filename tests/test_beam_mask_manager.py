@@ -200,12 +200,7 @@ class TestSharedTensorComposition:
         prepared = align_manager.prepare_movie(
             movie=movie,
             mask=beam_mask_result.to_mask(),
-            crop_bounds={
-                "min_y": beam_mask_result.output_crop_min_y,
-                "max_y": beam_mask_result.output_crop_max_y,
-                "min_x": beam_mask_result.output_crop_min_x,
-                "max_x": beam_mask_result.output_crop_max_x,
-            },
+            crop_bounds=beam_mask_result.output_crop_bounds,
         )
 
         expected_h = (

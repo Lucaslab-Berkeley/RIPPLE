@@ -4,6 +4,7 @@ import torch
 from pydantic import PositiveInt, field_validator
 from teamtomo_basemodel import BaseModelTeamTomo
 
+from ripple.config.crop_bounds_config import CropBoundsConfig
 from ripple.core.crop_bounds import CropBounds
 from ripple.core.prepare_movie import DEFAULT_PREP_CHUNK_SIZE, prepare_movie
 from ripple.utils.data_io import load_tensor_from_path, render_eer_to_tensor
@@ -42,6 +43,8 @@ class MovieConfig(BaseModelTeamTomo):
     mask_fill_noise: bool
         If True (and mask_path is set), pixels where the mask is 0 are replaced with
         per-frame Poisson noise instead of being zeroed out. Default is False.
+    crop_bounds_config: CropBoundsConfig
+        Auto-cropping config when a mask is provided.
     gain_flip: int
         Flip the gain map.
         0: no flip
@@ -72,6 +75,7 @@ class MovieConfig(BaseModelTeamTomo):
     dark_path: str | None = None
     mask_path: str | None = None
     mask_fill_noise: bool = False
+    crop_bounds_config: CropBoundsConfig = CropBoundsConfig()
 
     @field_validator("gain_flip")  # type: ignore[misc]
     @classmethod
@@ -126,13 +130,17 @@ class MovieConfig(BaseModelTeamTomo):
         crop_bounds : CropBounds | None
             Inclusive ``(min_y, max_y, min_x, max_x)`` crop bounds applied to `movie`,
             `gain_map`, `dark_map`, and `mask` before any other preparation step. If
-            None, no cropping is applied.
+            None and `mask` is not None, bounds are computed from `mask` via
+            :meth:`compute_crop_bounds`.
 
         Returns
         -------
         torch.Tensor
             Corrected movie tensor.
         """
+        if crop_bounds is None and mask is not None:
+            crop_bounds = self.compute_crop_bounds(mask)
+
         return prepare_movie(
             movie,
             gain_map,
@@ -147,6 +155,25 @@ class MovieConfig(BaseModelTeamTomo):
             chunk_size=chunk_size,
             crop_bounds=crop_bounds,
         )
+
+    def compute_crop_bounds(self, mask: torch.Tensor) -> CropBounds | None:
+        """Determine crop bounds for `mask` under `self.crop_bounds_config`.
+
+        Parameters
+        ----------
+        mask : torch.Tensor
+            Boolean mask with shape (height, width).
+
+        Returns
+        -------
+        CropBounds | None
+            Crop bounds per :func:`~ripple.core.crop_bounds.determine_crop_bounds`,
+            or None if ``crop_bounds_config.mode == "none"``.
+        """
+        if self.crop_bounds_config.mode == "none":
+            return None
+        mask_np = mask.detach().cpu().numpy().astype(bool)
+        return self.crop_bounds_config.determine_bounds(mask_np)
 
     @property
     def output_pixel_size(self) -> float:

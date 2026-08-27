@@ -10,7 +10,7 @@ import torch
 from skimage.measure import label, regionprops
 from torch_fourier_filter.bandpass import bandpass_filter
 
-from ripple.core.crop_bounds import CropMode, determine_crop_bounds, get_crop_bounds
+from ripple.core.crop_bounds import get_crop_bounds
 from ripple.core.prepare_movie import DEFAULT_PREP_CHUNK_SIZE
 
 
@@ -29,10 +29,6 @@ class BeamMaskParams(TypedDict):
     crop_max_y: int
     crop_min_x: int
     crop_max_x: int
-    output_crop_min_y: int
-    output_crop_max_y: int
-    output_crop_min_x: int
-    output_crop_max_x: int
     threshold_method: str
     pixel_size: float
 
@@ -324,17 +320,12 @@ def estimate_beam_mask(
     diameter_reduction: float,
     low_pass_resolution: float,
     device: torch.device | str | None = None,
-    crop_mode: CropMode = "none",
-    crop_round_to: int = 1,
-    crop_divisible_by: int = 1,
-    crop_target_shape: tuple[int, int] | None = None,
 ) -> BeamMaskParams:
     """Estimate a DeCo-LACE beam mask ellipse from a raw frame sum.
 
-    Low-pass filters `frame_sum` (on `device`), thresholds it with Otsu's method,
-    fits an ellipse to the largest connected component, and computes both the tight
-    crop bounds and the requested output crop bounds for the (possibly shrunk)
-    ellipse mask.
+    Low-pass filters `frame_sum` (on `device`), thresholds it with Otsu's method, fits
+    an ellipse to the largest connected component, and computes the tight crop bounds
+    for the (possibly shrunk) ellipse mask.
 
     Parameters
     ----------
@@ -353,24 +344,11 @@ def estimate_beam_mask(
     device : torch.device | str | None
         Device the low-pass filter runs on. If None, uses `frame_sum`'s current
         device.
-    crop_mode : Literal["none", "tight", "nice_size", "fixed_size"]
-        Output crop size policy, passed to :func:`determine_crop_bounds`. Default is
-        ``"none"`` (output crop bounds span the full frame).
-    crop_round_to : int
-        Multiple to round output crop side lengths to. Only used when
-        ``crop_mode="nice_size"``. Default is 1 (no-op).
-    crop_divisible_by : int
-        Output crop side lengths are constrained to be an exact multiple of this value.
-        typically a movie's super-resolution factor. Default is 1 (no constraint). See
-        :func:`~ripple.core.crop_bounds.determine_crop_bounds`.
-    crop_target_shape : tuple[int, int] | None
-        ``(height, width)`` of the desired output crop window. Required when
-        ``crop_mode="fixed_size"``. Default is None.
 
     Returns
     -------
     BeamMaskParams
-        Fitted ellipse, tight crop bounds, and output crop bounds.
+        Fitted ellipse and tight crop bounds.
 
     Raises
     ------
@@ -407,14 +385,6 @@ def estimate_beam_mask(
 
     min_y, max_y, min_x, max_x = get_crop_bounds(ellipse_mask)
 
-    output_bounds = determine_crop_bounds(
-        ellipse_mask,
-        mode=crop_mode,
-        round_to=crop_round_to,
-        target_shape=crop_target_shape,
-        divisible_by=crop_divisible_by,
-    )
-
     return {
         "center_y": center_y,
         "center_x": center_x,
@@ -428,10 +398,6 @@ def estimate_beam_mask(
         "crop_max_y": max_y,
         "crop_min_x": min_x,
         "crop_max_x": max_x,
-        "output_crop_min_y": output_bounds["min_y"],
-        "output_crop_max_y": output_bounds["max_y"],
-        "output_crop_min_x": output_bounds["min_x"],
-        "output_crop_max_x": output_bounds["max_x"],
         "threshold_method": threshold_method,
         "pixel_size": pixel_size,
     }
