@@ -1,6 +1,8 @@
 """Run the fused DeCo-LACE pipeline for a directory of movies."""
 
 import os
+from dataclasses import dataclass
+from pathlib import Path
 
 import yaml
 
@@ -26,6 +28,71 @@ def get_movie_paths(directory: str) -> list[str]:
     return movie_paths
 
 
+def _stem_prefixed(template: str | None, stem: str) -> str | None:
+    """Prefix `template`'s basename (not its directory) with `stem`."""
+    if template is None:
+        return None
+    template_path = Path(template)
+    return str(template_path.with_name(f"{stem}_{template_path.name}"))
+
+
+@dataclass
+class MovieOutputPaths:
+    """Per-movie output paths, derived from the template `OutputConfig`."""
+
+    dw_sum_output_path: str | None
+    deformation_field_output_path: str | None
+    motion_corrected_movie_output_path: str | None
+    rendered_movie_output_path: str | None
+    non_dw_sum_output_path: str | None
+    loss_trajectories_output_path: str | None
+
+
+def build_movie_outputs(
+    movie_paths: list[str], output_templates: OutputConfig
+) -> list[MovieOutputPaths]:
+    """Build per-movie output paths by prefixing the template paths with each stem.
+
+    Parameters
+    ----------
+    movie_paths: list[str]
+        Input movie paths.
+    output_templates: OutputConfig
+        The template output configuration whose paths get stem-prefixed.
+
+    Returns
+    -------
+    list[MovieOutputPaths]
+        One entry per movie, in the same order as `movie_paths`.
+    """
+    outputs = []
+    for movie_path in movie_paths:
+        stem = os.path.splitext(os.path.basename(movie_path))[0]
+        outputs.append(
+            MovieOutputPaths(
+                dw_sum_output_path=_stem_prefixed(
+                    output_templates.dw_sum_output_path, stem
+                ),
+                deformation_field_output_path=_stem_prefixed(
+                    output_templates.deformation_field_output_path, stem
+                ),
+                motion_corrected_movie_output_path=_stem_prefixed(
+                    output_templates.motion_corrected_movie_output_path, stem
+                ),
+                rendered_movie_output_path=_stem_prefixed(
+                    output_templates.rendered_movie_output_path, stem
+                ),
+                non_dw_sum_output_path=_stem_prefixed(
+                    output_templates.non_dw_sum_output_path, stem
+                ),
+                loss_trajectories_output_path=_stem_prefixed(
+                    output_templates.loss_trajectories_output_path, stem
+                ),
+            )
+        )
+    return outputs
+
+
 def main() -> None:
     """Run beam mask estimation, motion estimation, and correction for each movie."""
     with open(PIPELINE_YAML_PATH, encoding="utf-8") as f:
@@ -45,25 +112,20 @@ def main() -> None:
         alignment_config=AlignFramesConfig(**config["alignment_config"]),
     )
 
-    for movie_path in get_movie_paths(MOVIE_DIR):
+    movie_paths = get_movie_paths(MOVIE_DIR)
+    out_cfg = align_manager.output_config
+    movie_outputs = build_movie_outputs(movie_paths, out_cfg)
+
+    for movie_path, outputs in zip(movie_paths, movie_outputs, strict=True):
         movie_config.movie_path = movie_path
-
-        # Derive output from base-name of movie. Only update fields that are not None
-        stem = os.path.splitext(os.path.basename(movie_path))[0]
-        out_cfg = align_manager.output_config
-
-        def replace_path(path: str, stem: str = stem) -> str:
-            """Replace the path with a new path that includes the stem."""
-            return f"{stem}_{path}" if path is not None else None
-
-        # fmt: off
-        out_cfg.dw_sum_output_path                  = replace_path(out_cfg.dw_sum_output_path)  # noqa: E501
-        out_cfg.deformation_field_output_path       = replace_path(out_cfg.deformation_field_output_path)  # noqa: E501
-        out_cfg.motion_corrected_movie_output_path  = replace_path(out_cfg.motion_corrected_movie_output_path)  # noqa: E501
-        out_cfg.rendered_movie_output_path          = replace_path(out_cfg.rendered_movie_output_path)  # noqa: E501
-        out_cfg.non_dw_sum_output_path              = replace_path(out_cfg.non_dw_sum_output_path)  # noqa: E501
-        out_cfg.loss_trajectories_output_path       = replace_path(out_cfg.loss_trajectories_output_path)  # noqa: E501
-        # fmt: on
+        out_cfg.dw_sum_output_path = outputs.dw_sum_output_path
+        out_cfg.deformation_field_output_path = outputs.deformation_field_output_path
+        out_cfg.motion_corrected_movie_output_path = (
+            outputs.motion_corrected_movie_output_path
+        )
+        out_cfg.rendered_movie_output_path = outputs.rendered_movie_output_path
+        out_cfg.non_dw_sum_output_path = outputs.non_dw_sum_output_path
+        out_cfg.loss_trajectories_output_path = outputs.loss_trajectories_output_path
 
         # 1. Load the raw movie once, from disk.
         movie = movie_config.movie
