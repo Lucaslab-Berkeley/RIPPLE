@@ -19,7 +19,7 @@ movie_config:
   # Required: Fluence per frame in electrons per Angstrom^2/frame
   fluence_per_frame: 1.0
   
-  # Pre-exposure time in seconds (default: 0.0)
+  # The total pre-exposure in (e-/A^2) before the first frame of the movie (default: 0.0)
   pre_exposure: 0.0
   
   # Accelerating voltage in kilovolts (default: 300.0)
@@ -44,7 +44,7 @@ movie_config:
 
 output_config:
   # Whether to allow overwriting existing output files (default: true)
-  allow_file_overwrite: true
+  allow_file_overwrite: false
   
   # Optional: Path to save dose-weighted sum output (.mrc)
   dw_sum_output_path: ../../example/output/dw_sum_polished_laplacian_10x10.mrc
@@ -74,7 +74,7 @@ alignment_config:
   deformation_field_path: ../../example/output/def_field.csv
   
   # Number of optimization iterations (default: 100)
-  n_iterations: 50
+  max_iterations: 50
   
   # Type of interpolation grid: "catmull_rom" or "bspline" (default: "catmull_rom")
   grid_type: "catmull_rom"

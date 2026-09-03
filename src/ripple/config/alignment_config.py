@@ -1,19 +1,23 @@
 """Configuration for alignment of frames of a cryo-EM movie."""
 
+from pathlib import Path
 from typing import Annotated, Literal
 
-import torch
 from pydantic import Field, field_validator
-
-from ripple.utils.custom_types import BaseModelRIPPLE
-from ripple.utils.data_io import load_deformation_field
+from teamtomo_basemodel import BaseModelTeamTomo
+from torch_motion_correction import (
+    DeformationField,
+    FourierFilterConfig,
+    PatchSamplingConfig,
+)
+from torch_motion_correction import OptimizationConfig as MotionOptimizationConfig
 
 # Type alias for positive integer
 PositiveInt = Annotated[int, Field(gt=0)]
 PositiveFloat = Annotated[float, Field(gt=0)]
 
 
-class BaseAlignmentConfig(BaseModelRIPPLE):
+class BaseAlignmentConfig(BaseModelTeamTomo):
     """Base configuration for alignment operations.
 
     This class contains common parameters shared between different alignment
@@ -22,11 +26,11 @@ class BaseAlignmentConfig(BaseModelRIPPLE):
     Parameters
     ----------
     deformation_field_resolution: tuple[int, int, int]
-        Resolution of the deformation field in pixels (x, y, z).
+        Resolution of the deformation field in pixels (nt, nh, nw).
     deformation_field_path: Optional[str]
-        Path to the deformation field file. If None, the deformation field will be
-        initialized to zero.
-    n_iterations: int
+        Path to the deformation field CSV file. If None, the backend initialises
+        shifts to zero.
+    max_iterations: int
         Number of optimization iterations. Default is 100.
     grid_type: Literal["catmull_rom", "bspline"]
         Type of interpolation grid. Must be 'catmull_rom' or 'bspline'.
@@ -37,22 +41,69 @@ class BaseAlignmentConfig(BaseModelRIPPLE):
         Learning rate for optimization. Default is 0.2.
     skip_movie_preparation: bool
         Whether to skip the movie preparation step. Default is False.
+    early_stopping: bool
+        Whether to enable plateau-style early stopping. Default is False.
+    early_stopping_patience: int
+        Steps without improvement before stopping. Default is 5.
+    early_stopping_window_size: int
+        Number of recent loss values averaged for smoothing. Default is 3.
+    early_stopping_tolerance: float
+        Minimum relative improvement to reset the patience counter. Default is 1e-5.
     """
 
     deformation_field_resolution: tuple[PositiveInt, PositiveInt, PositiveInt]
-    deformation_field_path: str | None = None
-    n_iterations: PositiveInt = 100
+    deformation_field_path: str | None = None  # .csv or .hdf5/.h5
+    max_iterations: PositiveInt = 100
     grid_type: Literal["catmull_rom", "bspline"] = "catmull_rom"
     optimizer_type: Literal["adam", "lbfgs"] = "adam"
     learning_rate: float = 0.2
     skip_movie_preparation: bool = False
+    early_stopping: bool = False
+    early_stopping_patience: PositiveInt = 5
+    early_stopping_window_size: PositiveInt = 3
+    early_stopping_tolerance: float = 1e-5
 
     @property
-    def deformation_field(self) -> torch.Tensor:
-        """Get the deformation field tensor."""
+    def initial_deformation_field(self) -> DeformationField | None:
+        """Load and wrap the saved deformation field, or None to start from zero.
+
+        Returns
+        -------
+        DeformationField | None
+            - If no deformation_field_path is set, returns None to indicate to backend
+            that shifts should be initialized to zero.
+            - If a path is set, loads the tensor and wrapped into a
+            :class:`~torch_motion_correction.DeformationField` so that the ``grid_type``
+            travels with the data.
+        """
         if self.deformation_field_path is None:
-            return torch.zeros(self.deformation_field_resolution, dtype=torch.float32)
-        return load_deformation_field(self.deformation_field_path)
+            return None
+
+        path = Path(self.deformation_field_path)
+        if path.suffix in (".h5", ".hdf5"):
+            return DeformationField.from_hdf5(path)
+        return DeformationField.from_csv(path, grid_type=self.grid_type)
+
+    @property
+    def as_optimization_config(self) -> MotionOptimizationConfig:
+        """Build a :class:`~torch_motion_correction.OptimizationConfig`.
+
+        Returns
+        -------
+        MotionOptimizationConfig
+            The optimization config object to be passed to the motion correction
+            backend.
+        """
+        return MotionOptimizationConfig(
+            max_iterations=self.max_iterations,
+            optimizer_type=self.optimizer_type,
+            grid_type=self.grid_type,
+            optimizer_kwargs={"lr": self.learning_rate},
+            early_stopping=self.early_stopping,
+            early_stopping_patience=self.early_stopping_patience,
+            early_stopping_window_size=self.early_stopping_window_size,
+            early_stopping_tolerance=self.early_stopping_tolerance,
+        )
 
 
 class AlignFramesConfig(BaseAlignmentConfig):
@@ -71,14 +122,26 @@ class AlignFramesConfig(BaseAlignmentConfig):
     b_factor: float
         B-factor for filtering. Default is 500.
     frequency_range: tuple[float, float]
-        Frequency range for filtering in Angstroms. First value must be
-        larger than the second value. Default is (300, 10).
+        Frequency range for filtering in Angstroms. First value must be larger than the
+        second value. Default is (300, 10).
+    use_xc_prepass: bool
+        Whether to run a fast cross-correlation pre-pass to estimate global per-frame
+        shifts before the gradient-based optimization. The XC shifts seed the initial
+        deformation field so the optimizer starts from a good global motion estimate.
+        Default is True.
+    xc_prepass_downsample_factor: int
+        Integer factor to downsample each frame during the XC pre-pass. Increase from 1
+        to 2 or 4 for very large (e.g. super-resolution) movies to reduce peak GPU
+        memory. Only affects the whole-image pre-pass seed, not the patch-based local
+        optimizer. Default is 1 (no downsampling).
     """
 
     patch_shape: tuple[PositiveInt, PositiveInt] = (1024, 1024)
     loss_type: Literal["mse", "cc", "ncc"] = "mse"
     b_factor: float = 500
     frequency_range: tuple[PositiveFloat, PositiveFloat] = (300, 10)
+    use_xc_prepass: bool = True
+    xc_prepass_downsample_factor: PositiveInt = 1
 
     @field_validator("frequency_range")  # type: ignore[misc]
     @classmethod
@@ -114,8 +177,41 @@ class AlignFramesConfig(BaseAlignmentConfig):
             )
         return v
 
+    # --- Backend config accessors --------------------------------------------
 
-class PriorConfig(BaseModelRIPPLE):
+    @property
+    def as_patch_sampling_config(self) -> PatchSamplingConfig:
+        """Build a :class:`~torch_motion_correction.PatchSamplingConfig`."""
+        return PatchSamplingConfig(patch_shape=self.patch_shape)
+
+    @property
+    def as_fourier_filter_config(self) -> FourierFilterConfig:
+        """Build a :class:`~torch_motion_correction.FourierFilterConfig`."""
+        return FourierFilterConfig(
+            b_factor=self.b_factor,
+            frequency_range=self.frequency_range,
+        )
+
+    @property
+    def as_optimization_config(self) -> MotionOptimizationConfig:
+        """Build a :class:`~torch_motion_correction.OptimizationConfig`.
+
+        Extends the base implementation to include ``loss_type``.
+        """
+        return MotionOptimizationConfig(
+            max_iterations=self.max_iterations,
+            optimizer_type=self.optimizer_type,
+            loss_type=self.loss_type,
+            grid_type=self.grid_type,
+            optimizer_kwargs={"lr": self.learning_rate},
+            early_stopping=self.early_stopping,
+            early_stopping_patience=self.early_stopping_patience,
+            early_stopping_window_size=self.early_stopping_window_size,
+            early_stopping_tolerance=self.early_stopping_tolerance,
+        )
+
+
+class PriorConfig(BaseModelTeamTomo):
     """Configuration for motion priors.
 
     Parameters
@@ -157,7 +253,7 @@ class PriorConfig(BaseModelRIPPLE):
     init_sigma_a_offset: float = 1.0
 
 
-class OptimizationConfig(BaseModelRIPPLE):
+class OptimizationConfig(BaseModelTeamTomo):
     """Configuration for sigma optimization.
 
     Parameters

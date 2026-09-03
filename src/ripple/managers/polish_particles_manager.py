@@ -7,6 +7,11 @@ import pandas as pd
 import torch
 import yaml
 from pydantic import ConfigDict
+from teamtomo_basemodel import BaseModelTeamTomo
+
+if TYPE_CHECKING:
+    from torch_motion_correction import OptimizationTracker
+
 
 from ripple.config import (
     ComputationalConfig,
@@ -16,14 +21,10 @@ from ripple.config import (
 )
 from ripple.core import core_optimize_sigmas, core_polish_particles
 from ripple.managers import manager_utils
-from ripple.utils.custom_types import BaseModelRIPPLE
-from ripple.utils.data_io import read_mrc_to_tensor
-
-if TYPE_CHECKING:
-    from torch_motion_correction import OptimizationTracker
+from ripple.utils.data_io import load_tensor_from_path
 
 
-class PolishParticlesManager(BaseModelRIPPLE):
+class PolishParticlesManager(BaseModelTeamTomo):
     """Manager for aligning frames of a cryo-EM movie."""
 
     model_config: ClassVar = ConfigDict(arbitrary_types_allowed=True)
@@ -36,22 +37,10 @@ class PolishParticlesManager(BaseModelRIPPLE):
     def setup_backend_kwargs(
         self,
         movie: torch.Tensor,
-        gain_map: torch.Tensor,
-        dark_map: torch.Tensor,
         deformation_field: torch.Tensor,
     ) -> dict[str, Any]:
-        """Setup the backend kwargs for the align frames manager."""
-        loss_trajectories = self.output_config.loss_trajectories_output_path is not None
-        if loss_trajectories:
-            trajectory_kwargs = {
-                "sample_every_n_steps": 1,
-                "total_steps": self.alignment_config.n_iterations,
-            }
-        else:
-            trajectory_kwargs = None
+        """Setup the backend kwargs for core_polish_particles."""
         optimizer_kwargs = {"lr": self.alignment_config.learning_rate}
-        if optimizer_kwargs is None:
-            optimizer_kwargs = {"lr": 0.2}
         # Load YAML config to get the actual CSV path
         refine_config_yaml_path = self.alignment_config.particle_df_path
         with open(refine_config_yaml_path, encoding="utf-8") as f:
@@ -66,25 +55,17 @@ class PolishParticlesManager(BaseModelRIPPLE):
             "var_image": var_image,
             "mean_image": mean_image,
             "particle_indices": particle_indices,
-            "gain_map": gain_map,
-            "dark_map": dark_map,
-            "gain_flip": self.movie_config.gain_flip,
-            "gain_rot": self.movie_config.gain_rot,
             "pixel_size": self.movie_config.pixel_size,
             "deformation_field_resolution": (
                 self.alignment_config.deformation_field_resolution
             ),
             "pre_exposure": self.movie_config.pre_exposure,
             "fluence_per_frame": self.movie_config.fluence_per_frame,
-            "multiply_gain": self.movie_config.multiply_gain,
-            "loss_trajectories": loss_trajectories,
-            "skip_movie_preparation": self.alignment_config.skip_movie_preparation,
-            "n_iterations": self.alignment_config.n_iterations,
+            "max_iterations": self.alignment_config.max_iterations,
             "optimizer_kwargs": optimizer_kwargs,
-            "trajectory_kwargs": trajectory_kwargs,
             "grid_type": self.alignment_config.grid_type,
             "voltage": voltage,
-            "device": self.computational_config.gpu_id,
+            "device": self.computational_config.gpu_device,
             "loss_metric": self.alignment_config.loss_metric,
             "min_snr": self.alignment_config.min_snr,
             "best_n": self.alignment_config.best_n,
@@ -110,6 +91,7 @@ class PolishParticlesManager(BaseModelRIPPLE):
         movie: torch.Tensor | None = None,
         gain_map: torch.Tensor | None = None,
         dark_map: torch.Tensor | None = None,
+        mask: torch.Tensor | None = None,
         deformation_field: torch.Tensor | None = None,
         movie_extract: bool = True,
         particle_batch_size: int = 100,
@@ -128,6 +110,9 @@ class PolishParticlesManager(BaseModelRIPPLE):
             Gain map tensor. If provided, will not be loaded from config.
         dark_map: Optional[torch.Tensor]
             Dark map tensor. If provided, will not be loaded from config.
+        mask: Optional[torch.Tensor]
+            Mask with shape (height, width) multiplied uniformly into every frame. If
+            provided, will not be loaded from config.
         deformation_field: Optional[torch.Tensor]
             Deformation field tensor. If provided, will not be loaded from config.
         movie_extract: bool
@@ -139,25 +124,31 @@ class PolishParticlesManager(BaseModelRIPPLE):
         intermediate_fields_dir: str | None
             Directory to save the intermediate fields.
         """
-        (
+        movie, gain_map, dark_map, mask = manager_utils.load_missing_tensors(
+            self.computational_config,
+            self.movie_config,
             movie,
             gain_map,
             dark_map,
+            mask,
+        )
+        deformation_field = manager_utils.load_initial_deformation_field(
+            self.alignment_config,
+            self.computational_config.gpu_device,
             deformation_field,
-        ) = manager_utils.load_missing_tensors(
-            self.computational_config,
+        )
+
+        movie = manager_utils.prepare_movie_if_needed(
             self.movie_config,
             self.alignment_config,
             movie,
             gain_map,
             dark_map,
-            deformation_field,
+            mask,
+            self.computational_config.gpu_device,
         )
-
-        core_kwargs = self.setup_backend_kwargs(
-            movie, gain_map, dark_map, deformation_field
-        )
-        trajectory: OptimizationTracker | None = None
+        core_kwargs = self.setup_backend_kwargs(movie, deformation_field)
+        trajectory: OptimizationTracker
 
         # Check if we should run sigma optimization
         if self.alignment_config.optimize_sigmas:
@@ -289,8 +280,8 @@ def _load_refine_results(
     particle_indices = df.index
     indices_list.append(particle_indices)
     # Load MRC files and convert to tensors
-    var_image = read_mrc_to_tensor(var_image_path)
-    mean_image = read_mrc_to_tensor(mean_image_path)
+    var_image = load_tensor_from_path(var_image_path)
+    mean_image = load_tensor_from_path(mean_image_path)
 
     if var_image.ndim == 2:
         var_image = einops.rearrange(var_image, "h w -> 1 h w")

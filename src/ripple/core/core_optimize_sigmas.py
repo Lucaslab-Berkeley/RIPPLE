@@ -12,9 +12,7 @@ import pandas as pd
 import torch
 from scipy.optimize import minimize
 from torch_cubic_spline_grids import CubicCatmullRomGrid3d
-from torch_motion_correction.deformation_field_utils import (
-    resample_deformation_field,
-)
+from torch_motion_correction import DeformationField
 
 from ripple.utils.data_io import (
     load_template_volume_from_config,
@@ -112,7 +110,8 @@ def core_optimize_sigmas(
         template as the motion loop.
         Default is None.
     pre_exposure : float
-        Pre-exposure time in seconds. Default 0.0
+        The total pre-exposure in (e-/A^2) before the first frame of the movie.
+        Default 0.0.
     fluence_per_frame : float
         Fluence per frame in e/Å². Default 1.0
     motion_iterations : int
@@ -324,7 +323,8 @@ def optimize_sigmas_2dtm_nelder_mead(
         template as the motion loop.
         Default is None.
     pre_exposure : float
-        Pre-exposure time in seconds. Default 0.0
+        The total pre-exposure in (e-/A^2) before the first frame of the movie.
+        Default 0.0
     fluence_per_frame : float
         Fluence per frame in e/Å². Default 1.0
     motion_iterations : int
@@ -402,7 +402,7 @@ def optimize_sigmas_2dtm_nelder_mead(
         - "best_sigma_iter": iteration with best validation loss
         - "best_sigma_params": best sigma parameters found
     """
-    torch.set_grad_enabled(True)
+    torch.set_grad_enabled(True)  # NOTE: replace with `torch.enable_grad()`
     temp_dir = Path(tempfile.mkdtemp(prefix="ripple_sigma_opt_nelder_"))
 
     (
@@ -865,7 +865,8 @@ def optimize_sigmas_2dtm_optuna(
         template as the motion loop.
         Default is None.
     pre_exposure : float
-        Pre-exposure time in seconds. Default 0.0
+        The total pre-exposure in (e-/A^2) before the first frame of the movie.
+        Default 0.0
     fluence_per_frame : float
         Fluence per frame in e/Å². Default 1.0
     motion_iterations : int
@@ -962,7 +963,7 @@ def optimize_sigmas_2dtm_optuna(
     """
     print("Optimizing sigmas using Optuna...")
 
-    torch.set_grad_enabled(True)
+    torch.set_grad_enabled(True)  # NOTE: replace with `torch.enable_grad()`
     temp_dir = Path(tempfile.mkdtemp(prefix="ripple_sigma_opt_optuna_"))
 
     (
@@ -2064,8 +2065,10 @@ def _run_inner_optimization_common(
             size=(2, *deformation_field_resolution), device=device, requires_grad=True
         )
     else:
-        deformation_field_data = resample_deformation_field(
-            initial_deformation_field, deformation_field_resolution
+        deformation_field_data = (
+            DeformationField(data=initial_deformation_field)
+            .resample(deformation_field_resolution)
+            .data
         )
         deformation_field_data = deformation_field_data - torch.mean(
             deformation_field_data, dim=(1, 2, 3), keepdim=True

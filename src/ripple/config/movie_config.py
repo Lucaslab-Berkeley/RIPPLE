@@ -1,18 +1,16 @@
 """Serialization and validation of movie parameters for 2DTM."""
 
 import torch
-from pydantic import field_validator
+from pydantic import PositiveInt, field_validator
+from teamtomo_basemodel import BaseModelTeamTomo
 
-from ripple.utils.custom_types import BaseModelRIPPLE
-from ripple.utils.data_io import (
-    load_mrc_image,
-    load_mrc_movie,
-    read_tif_to_tensor,
-    render_eer_to_tensor,
-)
+from ripple.config.crop_bounds_config import CropBoundsConfig
+from ripple.core.crop_bounds import CropBounds
+from ripple.core.prepare_movie import DEFAULT_PREP_CHUNK_SIZE, prepare_movie
+from ripple.utils.data_io import load_tensor_from_path, render_eer_to_tensor
 
 
-class MovieConfig(BaseModelRIPPLE):
+class MovieConfig(BaseModelTeamTomo):
     """Serialization and validation of movie parameters for RIPPLE.
 
     Parameters
@@ -20,13 +18,18 @@ class MovieConfig(BaseModelRIPPLE):
     movie_path: str
         Path to the movie file.
     pixel_size: float
-        Pixel size in Angstroms per pixel.
+        Pixel size of the movie, as collected, in Angstroms per pixel.
+    super_resolution_factor: int
+        Integer factor relating the native `pixel_size` to the desired output pixel
+        size of the final micrograph, i.e.
+        `output_pixel_size = pixel_size * super_resolution_factor`.
+        Default is 1 (no super-resolution).
     fluence: float
         Total fluence in electrons per Angstrom^2.
     fluence_per_frame: float
         Fluence per frame in electrons per Angstrom^2/frame.
     pre_exposure: float
-        Pre-exposure time in seconds.
+        The total pre-exposure in (e-/A^2) before the first frame of the movie.
     voltage: float
         Accelerating voltage in kilovolts.
         Default is 300.0 kV.
@@ -34,6 +37,14 @@ class MovieConfig(BaseModelRIPPLE):
         Path to the gain map file. If None, the gain map will be initialized to zero.
     dark_path: Optional[str]
         Path to the dark map file. If None, the dark map will be initialized to zero.
+    mask_path: Optional[str]
+        Path to a (height, width) mask file applied uniformly to every frame during
+        preparation. If None (default), no masking is applied.
+    mask_fill_noise: bool
+        If True (and mask_path is set), pixels where the mask is 0 are replaced with
+        per-frame Poisson noise instead of being zeroed out. Default is False.
+    crop_bounds_config: CropBoundsConfig
+        Auto-cropping config when a mask is provided.
     gain_flip: int
         Flip the gain map.
         0: no flip
@@ -50,8 +61,9 @@ class MovieConfig(BaseModelRIPPLE):
         gain map. Default is True.
     """
 
-    movie_path: str
+    movie_path: str | None = None
     pixel_size: float
+    super_resolution_factor: PositiveInt = 1
     fluence: float
     fluence_per_frame: float
     pre_exposure: float = 0.0
@@ -61,6 +73,9 @@ class MovieConfig(BaseModelRIPPLE):
     gain_rot: int = 0
     multiply_gain: bool = True
     dark_path: str | None = None
+    mask_path: str | None = None
+    mask_fill_noise: bool = False
+    crop_bounds_config: CropBoundsConfig = CropBoundsConfig()
 
     @field_validator("gain_flip")  # type: ignore[misc]
     @classmethod
@@ -78,47 +93,122 @@ class MovieConfig(BaseModelRIPPLE):
             raise ValueError(f"gain_rot must be 0, 1, 2, or 3, got {v}")
         return v
 
+    def prepare(
+        self,
+        movie: torch.Tensor,
+        gain_map: torch.Tensor | None = None,
+        dark_map: torch.Tensor | None = None,
+        mask: torch.Tensor | None = None,
+        device: torch.device | str | None = None,
+        storage_device: torch.device | str | None = None,
+        chunk_size: int = DEFAULT_PREP_CHUNK_SIZE,
+        crop_bounds: CropBounds | None = None,
+    ) -> torch.Tensor:
+        """Apply gain, dark, hot-pixel, mask, and mean-zero corrections to a movie.
+
+        Parameters
+        ----------
+        movie : torch.Tensor
+            Raw movie tensor (frames x height x width).
+        gain_map : torch.Tensor | None
+            Gain map tensor. If None, gain correction is skipped.
+        dark_map : torch.Tensor | None
+            Dark map tensor. If None, dark correction is skipped.
+        mask : torch.Tensor | None
+            Mask with shape (height, width) applied uniformly to every frame. If None,
+            no masking is applied. If ``self.mask_fill_noise`` is True, then masked out
+            pixels (``mask == 0``) are replaced with per-frame Poisson. Otherwise, those
+            pixel locations are zeroed.
+        device : torch.device | str | None
+            Device each chunk's gain/dark/hot-pixel/mask compute runs on. If None, uses
+            `movie`'s current device.
+        storage_device : torch.device | str | None
+            Device the returned, fully-prepared movie is stored on. If None, defaults to
+            `device`.
+        chunk_size : int
+            Number of frames to transfer/correct at a time.
+        crop_bounds : CropBounds | None
+            Inclusive ``(min_y, max_y, min_x, max_x)`` crop bounds applied to `movie`,
+            `gain_map`, `dark_map`, and `mask` before any other preparation step. If
+            None and `mask` is not None, bounds are computed from `mask` via
+            :meth:`compute_crop_bounds`.
+
+        Returns
+        -------
+        torch.Tensor
+            Corrected movie tensor.
+        """
+        if crop_bounds is None and mask is not None:
+            crop_bounds = self.compute_crop_bounds(mask)
+
+        return prepare_movie(
+            movie,
+            gain_map,
+            dark_map,
+            self.gain_flip,
+            self.gain_rot,
+            self.multiply_gain,
+            mask=mask,
+            mask_fill_noise=self.mask_fill_noise,
+            device=device,
+            storage_device=storage_device,
+            chunk_size=chunk_size,
+            crop_bounds=crop_bounds,
+        )
+
+    def compute_crop_bounds(self, mask: torch.Tensor) -> CropBounds | None:
+        """Determine crop bounds for `mask` under `self.crop_bounds_config`.
+
+        Parameters
+        ----------
+        mask : torch.Tensor
+            Boolean mask with shape (height, width).
+
+        Returns
+        -------
+        CropBounds | None
+            Crop bounds per :func:`~ripple.core.crop_bounds.determine_crop_bounds`,
+            or None if ``crop_bounds_config.mode == "none"``.
+        """
+        if self.crop_bounds_config.mode == "none":
+            return None
+        mask_np = mask.detach().cpu().numpy().astype(bool)
+        return self.crop_bounds_config.determine_bounds(mask_np)
+
+    @property
+    def output_pixel_size(self) -> float:
+        """Pixel size of the final micrograph, after Fourier-crop downsampling."""
+        return self.pixel_size * int(self.super_resolution_factor)
+
     @property
     def movie(self) -> torch.Tensor:
         """Get the movie tensor."""
         if not self.movie_path:
             raise ValueError("Movie path is not set.")
-        if self.movie_path.endswith(".mrc"):
-            return load_mrc_movie(self.movie_path)
-        if self.movie_path.endswith(".tif"):
-            return read_tif_to_tensor(self.movie_path)
         if self.movie_path.endswith(".eer"):
             return render_eer_to_tensor(
                 self.movie_path, self.fluence_per_frame, self.fluence
             )
-        raise ValueError(f"Unsupported movie file extension: {self.movie_path}")
+        return load_tensor_from_path(self.movie_path, expected_ndim=3)
+
+    @staticmethod
+    def _load_2d(path: str | None) -> torch.Tensor | None:
+        """Load a (height, width) tensor from `path`, or None if `path` is unset."""
+        if path is None:
+            return None
+        return load_tensor_from_path(path, expected_ndim=2)
 
     @property
-    def gain(self) -> torch.Tensor:
+    def gain(self) -> torch.Tensor | None:
         """Get the gain tensor."""
-        if self.gain_path is None:
-            return None
-        if self.gain_path.endswith(".mrc"):
-            return load_mrc_image(self.gain_path)
-        if (
-            self.gain_path.endswith(".tif")
-            or self.gain_path.endswith(".tiff")
-            or self.gain_path.endswith(".gain")
-        ):
-            return read_tif_to_tensor(self.gain_path)
-        raise ValueError(f"Unsupported gain file extension: {self.gain_path}")
+        return self._load_2d(self.gain_path)
 
     @property
-    def dark(self) -> torch.Tensor:
+    def mask(self) -> torch.Tensor | None:
+        """Get the mask tensor."""
+        return self._load_2d(self.mask_path)
+
+    @property
+    def dark(self) -> torch.Tensor | None:
         """Get the dark tensor."""
-        if self.dark_path is None:
-            return None
-        if self.dark_path.endswith(".mrc"):
-            return load_mrc_image(self.dark_path)
-        if (
-            self.dark_path.endswith(".tif")
-            or self.dark_path.endswith(".tiff")
-            or self.dark_path.endswith(".dark")
-        ):
-            return read_tif_to_tensor(self.dark_path)
-        raise ValueError(f"Unsupported dark file extension: {self.dark_path}")
+        return self._load_2d(self.dark_path)

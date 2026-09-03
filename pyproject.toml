@@ -19,7 +19,7 @@ name = "RIPPLE"
 dynamic = ["version"]
 description = "Cryo-EM movie frame alignment and polishing. RIPPLE: Realigning image patches and polishing local environment"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "BSD-3-Clause" }
 authors = [{ name = "Josh Dickerson", email = "jdickerson@berkeley.edu" }]
 # https://pypi.org/classifiers/
@@ -47,11 +47,17 @@ dependencies = [
     "pyyaml",
     "tqdm",
     "types-PyYAML",
+    "teamtomo-basemodel",
     "torch-motion-correction>=0.0.5",
     "torch-fourier-filter",
+    "torch-fourier-rescale",
     "leopard-em",
     "scipy",
     "optuna",
+    "h5py",
+    "dm4",
+    "opencv-python-headless",
+    "scikit-image",
 ]
 
 # https://peps.python.org/pep-0621/#dependencies-optional-dependencies
@@ -134,7 +140,14 @@ skip-magic-trailing-comma = false  # default is false
 minversion = "7.0"
 addopts = ["--color=yes"]
 testpaths = ["tests"]
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    "ignore:`torch.jit.script_method` is deprecated:DeprecationWarning",
+    # mrcfile 1.5.4 sets ndarray.dtype directly when reading MRC headers, which
+    # numpy >=2.5 deprecates. No fixed mrcfile release exists yet; remove this
+    # once mrcfile stops triggering the warning.
+    "ignore:Setting the dtype on a NumPy array has been deprecated:DeprecationWarning",
+]
 
 # https://mypy.readthedocs.io/en/stable/config_file.html
 [tool.mypy]

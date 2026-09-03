@@ -22,10 +22,15 @@ class ComputationalConfig(BaseModel):
         - The specific string "cpu" which means to use CPU.
 
         Note: Only a single GPU or CPU is supported (no multiprocessing).
+    keep_movie_on_cpu : bool
+        When True, the prepared movie and output frames stored on CPU RAM instead of
+        `gpu_device`. Individual steps (XC pre-pass, local optimizer patch precompute,
+        final correction) then stream frames to the GPU. Default is False.
     """
 
     # Type-hinting here ensures only single GPU or CPU (no lists allowed)
     gpu_id: str | NonNegativeInt | None = 0
+    keep_movie_on_cpu: bool = False
 
     @field_validator("gpu_id")  # type: ignore[misc]
     @classmethod
@@ -94,3 +99,14 @@ class ComputationalConfig(BaseModel):
             f"Invalid type for gpu_id: {type(self.gpu_id)}. "
             "Expected int, str, or 'cpu'."
         )
+
+    @property
+    def movie_storage_device(self) -> torch.device:
+        """Device the persistent, full-resolution prepared movie is stored on.
+
+        Returns
+        -------
+        torch.device
+            CPU if `keep_movie_on_cpu` is True, otherwise `gpu_device`.
+        """
+        return torch.device("cpu") if self.keep_movie_on_cpu else self.gpu_device

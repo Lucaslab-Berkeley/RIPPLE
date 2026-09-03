@@ -5,9 +5,17 @@
 
 import pytest
 import torch
+from torch_motion_correction import (
+    DeformationField,
+    PatchSamplingConfig,
+    correct_motion,
+    estimate_local_motion,
+)
+from torch_motion_correction import OptimizationConfig as MotionOptimizationConfig
+from torch_motion_correction.optimization_state import OptimizationTracker
 
 import ripple
-from ripple.core.core_align_frames import core_align_frames
+from ripple.core.prepare_movie import prepare_movie
 
 
 def test_imports_with_version():
@@ -18,196 +26,148 @@ def test_imports_with_version():
 @pytest.fixture
 def sample_movie():
     """Create a sample movie tensor for testing."""
-    # Create a simple 3D movie: 10 frames of 64x64 pixels
     return torch.randn(10, 64, 64, dtype=torch.float32)
 
 
 @pytest.fixture
 def sample_deformation_field():
-    """Create a sample deformation field for testing."""
-    # Deformation field with shape (n_z, n_y, n_x) = (1, 8, 8)
-    return torch.zeros(2, 1, 8, 8, dtype=torch.float32)
-
-
-def test_core_align_frames_basic(sample_movie, sample_deformation_field):
-    """Test basic functionality of core_align_frames."""
-    corrected_movie, updated_deformation_field, movie_prepared, trajectory = (
-        core_align_frames(
-            movie=sample_movie,
-            deformation_field=sample_deformation_field,
-            gain_map=None,
-            dark_map=None,
-            gain_flip=0,
-            gain_rot=0,
-            pixel_size=1.0,
-            deformation_field_resolution=(1, 8, 8),
-            patch_shape=(32, 32),
-            multiply_gain=True,
-            loss_trajectories=False,
-            skip_movie_preparation=False,
-            n_iterations=5,  # Use fewer iterations for faster testing
-            do_correct_motion=True,
-        )
+    """Create a sample DeformationField for testing."""
+    return DeformationField(
+        data=torch.zeros(2, 1, 8, 8, dtype=torch.float32),
+        grid_type="catmull_rom",
     )
 
-    # Check that outputs have correct types and shapes
-    assert isinstance(corrected_movie, torch.Tensor)
-    assert isinstance(updated_deformation_field, torch.Tensor)
-    assert isinstance(movie_prepared, torch.Tensor)
-    assert trajectory is None  # No trajectory requested
 
-    # Check shapes are preserved
-    assert corrected_movie.shape == sample_movie.shape
-    assert movie_prepared.shape == sample_movie.shape
-    assert updated_deformation_field.shape == sample_deformation_field.shape
+@pytest.fixture
+def patch_sampling():
+    """Patch sampling config used across tests."""
+    return PatchSamplingConfig(patch_shape=(32, 32))
 
 
-def test_core_align_frames_with_skip_preparation(
-    sample_movie, sample_deformation_field
+@pytest.fixture
+def fast_optimization():
+    """Optimization config with few iterations for fast tests."""
+    return MotionOptimizationConfig(max_iterations=5)
+
+
+def test_estimate_motion_basic(
+    sample_movie, sample_deformation_field, patch_sampling, fast_optimization
 ):
-    """Test core_align_frames with skip_movie_preparation=True."""
-    corrected_movie, _, movie_prepared, _ = core_align_frames(
-        movie=sample_movie,
-        deformation_field=sample_deformation_field,
-        gain_map=None,
-        dark_map=None,
-        gain_flip=0,
-        gain_rot=0,
-        pixel_size=1.0,
+    """Test basic functionality of estimate_local_motion."""
+    deformation_field, trajectory = estimate_local_motion(
+        image=sample_movie,
+        initial_deformation_field=sample_deformation_field,
+        pixel_spacing=1.0,
         deformation_field_resolution=(1, 8, 8),
-        patch_shape=(32, 32),
-        skip_movie_preparation=True,
-        n_iterations=5,
-        do_correct_motion=True,
+        patch_sampling=patch_sampling,
+        optimization=fast_optimization,
     )
 
-    # When skipping preparation, movie_prepared should be the same as input movie
-    assert torch.allclose(movie_prepared, sample_movie)
-    assert corrected_movie.shape == sample_movie.shape
+    assert isinstance(deformation_field, DeformationField)
+    assert isinstance(trajectory, OptimizationTracker)
+    assert deformation_field.shape == sample_deformation_field.shape
 
 
-def test_core_align_frames_without_motion_correction(
-    sample_movie, sample_deformation_field
+def test_estimate_motion_then_correct(
+    sample_movie, sample_deformation_field, patch_sampling, fast_optimization
 ):
-    """Test core_align_frames with do_correct_motion=False."""
-    corrected_movie, updated_deformation_field, movie_prepared, _ = core_align_frames(
-        movie=sample_movie,
-        deformation_field=sample_deformation_field,
-        gain_map=None,
-        dark_map=None,
-        gain_flip=0,
-        gain_rot=0,
-        pixel_size=1.0,
+    """Test that estimate_local_motion output can be used with correct_motion."""
+    deformation_field, _ = estimate_local_motion(
+        image=sample_movie,
+        initial_deformation_field=sample_deformation_field,
+        pixel_spacing=1.0,
         deformation_field_resolution=(1, 8, 8),
-        patch_shape=(32, 32),
-        n_iterations=5,
-        do_correct_motion=False,
+        patch_sampling=patch_sampling,
+        optimization=fast_optimization,
     )
 
-    # When not correcting motion, corrected_movie should equal movie_prepared
-    assert torch.allclose(corrected_movie, movie_prepared)
-    assert updated_deformation_field.shape == sample_deformation_field.shape
+    corrected = correct_motion(
+        image=sample_movie,
+        deformation_field=deformation_field,
+        pixel_spacing=1.0,
+    )
+
+    assert corrected.shape == sample_movie.shape
 
 
-def test_core_align_frames_single_frame(sample_deformation_field):
-    """Test core_align_frames with a single frame movie."""
+def test_estimate_motion_single_frame(
+    sample_deformation_field, patch_sampling, fast_optimization
+):
+    """Test estimate_motion with a single frame movie."""
     single_frame_movie = torch.randn(1, 64, 64, dtype=torch.float32)
 
-    corrected_movie, updated_deformation_field, movie_prepared, _ = core_align_frames(
-        movie=single_frame_movie,
-        deformation_field=sample_deformation_field,
-        gain_map=None,
-        dark_map=None,
-        gain_flip=0,
-        gain_rot=0,
-        pixel_size=1.0,
+    deformation_field, _ = estimate_local_motion(
+        image=single_frame_movie,
+        initial_deformation_field=sample_deformation_field,
+        pixel_spacing=1.0,
         deformation_field_resolution=(1, 8, 8),
-        patch_shape=(32, 32),
-        multiply_gain=True,
-        loss_trajectories=False,
-        skip_movie_preparation=False,
-        n_iterations=5,
-        do_correct_motion=True,
+        patch_sampling=patch_sampling,
+        optimization=fast_optimization,
     )
 
-    # Should handle single frame correctly
-    assert corrected_movie.shape == single_frame_movie.shape
-    assert movie_prepared.shape == single_frame_movie.shape
-    assert updated_deformation_field.shape == sample_deformation_field.shape
+    assert deformation_field.shape == sample_deformation_field.shape
 
 
-def test_core_align_frames_with_gain_map(sample_movie, sample_deformation_field):
-    """Test core_align_frames with a gain map."""
+def test_estimate_motion_with_gain_map(
+    sample_movie, sample_deformation_field, patch_sampling, fast_optimization
+):
+    """Test estimate_motion after gain map preparation."""
     gain_map = torch.ones(64, 64, dtype=torch.float32) * 2.0
+    prepared = prepare_movie(sample_movie, gain_map, None, gain_flip=0, gain_rot=0)
 
-    corrected_movie, _, movie_prepared, _ = core_align_frames(
-        movie=sample_movie,
-        deformation_field=sample_deformation_field,
-        gain_map=gain_map,
-        dark_map=None,
-        gain_flip=0,
-        gain_rot=0,
-        pixel_size=1.0,
+    deformation_field, _ = estimate_local_motion(
+        image=prepared,
+        initial_deformation_field=sample_deformation_field,
+        pixel_spacing=1.0,
         deformation_field_resolution=(1, 8, 8),
-        patch_shape=(32, 32),
-        multiply_gain=True,
-        loss_trajectories=False,
-        skip_movie_preparation=False,
-        n_iterations=5,
-        do_correct_motion=True,
+        patch_sampling=patch_sampling,
+        optimization=fast_optimization,
     )
 
-    # Should process successfully
-    assert corrected_movie.shape == sample_movie.shape
-    assert movie_prepared.shape == sample_movie.shape
+    corrected = correct_motion(
+        image=prepared,
+        deformation_field=deformation_field,
+        pixel_spacing=1.0,
+    )
+    assert corrected.shape == sample_movie.shape
 
 
-def test_core_align_frames_with_dark_map(sample_movie, sample_deformation_field):
-    """Test core_align_frames with a dark map."""
+def test_estimate_motion_with_dark_map(
+    sample_movie, sample_deformation_field, patch_sampling, fast_optimization
+):
+    """Test estimate_motion after dark map preparation."""
     dark_map = torch.ones(64, 64, dtype=torch.float32) * 0.5
+    prepared = prepare_movie(sample_movie, None, dark_map, gain_flip=0, gain_rot=0)
 
-    corrected_movie, _, movie_prepared, _ = core_align_frames(
-        movie=sample_movie,
-        deformation_field=sample_deformation_field,
-        gain_map=None,
-        dark_map=dark_map,
-        gain_flip=0,
-        gain_rot=0,
-        pixel_size=1.0,
+    deformation_field, _ = estimate_local_motion(
+        image=prepared,
+        initial_deformation_field=sample_deformation_field,
+        pixel_spacing=1.0,
         deformation_field_resolution=(1, 8, 8),
-        patch_shape=(32, 32),
-        multiply_gain=True,
-        loss_trajectories=False,
-        skip_movie_preparation=False,
-        n_iterations=5,
-        do_correct_motion=True,
+        patch_sampling=patch_sampling,
+        optimization=fast_optimization,
     )
 
-    # Should process successfully
-    assert corrected_movie.shape == sample_movie.shape
-    assert movie_prepared.shape == sample_movie.shape
+    corrected = correct_motion(
+        image=prepared,
+        deformation_field=deformation_field,
+        pixel_spacing=1.0,
+    )
+    assert corrected.shape == sample_movie.shape
 
 
-def test_core_align_frames_zero_iterations(sample_movie, sample_deformation_field):
-    """Test core_align_frames with zero iterations."""
-    corrected_movie, updated_deformation_field, movie_prepared, _ = core_align_frames(
-        movie=sample_movie,
-        deformation_field=sample_deformation_field,
-        gain_map=None,
-        dark_map=None,
-        gain_flip=0,
-        gain_rot=0,
-        pixel_size=1.0,
+def test_estimate_motion_no_initial_field(
+    sample_movie, patch_sampling, fast_optimization
+):
+    """Test estimate_motion with no initial deformation field (zero-initialized)."""
+    deformation_field, trajectory = estimate_local_motion(
+        image=sample_movie,
+        initial_deformation_field=None,
+        pixel_spacing=1.0,
         deformation_field_resolution=(1, 8, 8),
-        patch_shape=(32, 32),
-        multiply_gain=True,
-        loss_trajectories=False,
-        skip_movie_preparation=False,
-        n_iterations=0,  # Zero iterations
-        do_correct_motion=True,
+        patch_sampling=patch_sampling,
+        optimization=fast_optimization,
     )
 
-    # Should still return valid outputs
-    assert corrected_movie.shape == sample_movie.shape
-    assert movie_prepared.shape == sample_movie.shape
-    assert updated_deformation_field.shape == sample_deformation_field.shape
+    assert isinstance(deformation_field, DeformationField)
+    assert isinstance(trajectory, OptimizationTracker)

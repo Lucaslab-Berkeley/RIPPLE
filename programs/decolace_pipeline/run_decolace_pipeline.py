@@ -1,20 +1,21 @@
-"""Run the align frames manager for a directory of movies.
-
-Notes
------
-This script globs all movies in a directory (eer, tif, or mrc) and applies the same
-alignment config to each movie, except the output paths which are updated per-loop. Use
-this script as an example for how to run RIPPLE on your data.
-"""
+"""Run the fused DeCo-LACE pipeline for a directory of movies."""
 
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from ripple.config import OutputConfig
-from ripple.managers import AlignFramesManager
+import yaml
 
-ALIGN_YAML_PATH = "align_movies_example_config.yaml"
+from ripple.config import (
+    AlignFramesConfig,
+    BeamMaskConfig,
+    ComputationalConfig,
+    MovieConfig,
+    OutputConfig,
+)
+from ripple.managers import AlignFramesManager, BeamMaskManager
+
+PIPELINE_YAML_PATH = "decolace_pipeline_example_config.yaml"
 MOVIE_DIR = "../../example/movies"
 
 
@@ -22,7 +23,7 @@ def get_movie_paths(directory: str) -> list[str]:
     """Get the paths of the movies in the directory."""
     movie_paths = []
     for file in os.listdir(directory):
-        if file.endswith(".mrc") or file.endswith(".tif") or file.endswith(".eer"):
+        if file.endswith((".mrc", ".tif", ".eer")):
             movie_paths.append(os.path.join(directory, file))
     return movie_paths
 
@@ -92,16 +93,31 @@ def build_movie_outputs(
     return outputs
 
 
-def main():
-    """Run alignment for all movies in the directory."""
-    movie_paths = get_movie_paths(MOVIE_DIR)
-    manager = AlignFramesManager.from_yaml(ALIGN_YAML_PATH)
+def main() -> None:
+    """Run beam mask estimation, motion estimation, and correction for each movie."""
+    with open(PIPELINE_YAML_PATH, encoding="utf-8") as f:
+        config = yaml.safe_load(f)
 
-    out_cfg = manager.output_config
+    computational_config = ComputationalConfig(**config["computational_config"])
+    movie_config = MovieConfig(**config["movie_config"])
+    beam_mask_manager = BeamMaskManager(
+        computational_config=computational_config,
+        movie_config=movie_config,
+        beam_mask_config=BeamMaskConfig(**config["beam_mask_config"]),
+    )
+    align_manager = AlignFramesManager(
+        computational_config=computational_config,
+        movie_config=movie_config,
+        output_config=OutputConfig(**config["output_config"]),
+        alignment_config=AlignFramesConfig(**config["alignment_config"]),
+    )
+
+    movie_paths = get_movie_paths(MOVIE_DIR)
+    out_cfg = align_manager.output_config
     movie_outputs = build_movie_outputs(movie_paths, out_cfg)
 
     for movie_path, outputs in zip(movie_paths, movie_outputs, strict=True):
-        manager.movie_config.movie_path = movie_path
+        movie_config.movie_path = movie_path
         out_cfg.dw_sum_output_path = outputs.dw_sum_output_path
         out_cfg.deformation_field_output_path = outputs.deformation_field_output_path
         out_cfg.motion_corrected_movie_output_path = (
@@ -111,15 +127,30 @@ def main():
         out_cfg.non_dw_sum_output_path = outputs.non_dw_sum_output_path
         out_cfg.loss_trajectories_output_path = outputs.loss_trajectories_output_path
 
-        # 1. Load and prepare (gain/dark correct, mean-zero)
-        prepared = manager.prepare_movie()
+        # 1. Load the raw movie once, from disk.
+        movie = movie_config.movie
 
-        # 2. Estimate motion: XC pre-pass seeds global shifts, then gradient
-        #    optimizer refines at the configured deformation field resolution
-        deformation_field, trajectory = manager.estimate_motion(prepared)
+        # 2. Estimate the beam mask from the raw frame sum (reuses `movie`, no reload).
+        beam_mask_result = beam_mask_manager.estimate(movie=movie)
 
-        # 3. Apply deformation field and write all configured outputs
-        manager.correct_and_save(prepared, deformation_field, trajectory)
+        # 3. Prepare the movie for alignment which does the following steps:
+        #    a. Crops the movie to beam mask, if requested by CropBoundsConfig
+        #    b. Applies gain and dark correction
+        #    c. Sets mean of each frame to zero
+        #    d. Fills pixels outside mask to Poisson noise with lambda equal to the
+        #       average electron count per-pixel in the central region
+        prepared = align_manager.prepare_movie(
+            movie=movie,
+            mask=beam_mask_result.to_mask(),
+            crop_bounds=beam_mask_result.output_crop_bounds,
+        )
+
+        # 4. Estimate motion: XC pre-pass seeds global shifts, then gradient
+        #    optimizer refines at the configured deformation field resolution.
+        deformation_field, trajectory = align_manager.estimate_motion(prepared)
+
+        # 5. Apply the deformation field and write all configured outputs.
+        align_manager.correct_and_save(prepared, deformation_field, trajectory)
 
 
 if __name__ == "__main__":

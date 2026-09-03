@@ -9,10 +9,10 @@ import torch
 from ripple.core.prepare_movie import (
     apply_dark,
     apply_gain,
-    prepare_core,
+    apply_mask,
     prepare_movie,
     remove_hot_pixels,
-    set_frames_mean_zero,
+    transform_reference_map,
 )
 
 
@@ -135,38 +135,6 @@ def test_apply_dark_basic(sample_movie, sample_dark_map):
     assert torch.allclose(result, expected)
 
 
-# Tests for set_frames_mean_zero
-def test_set_frames_mean_zero(sample_movie):
-    """Test that set_frames_mean_zero makes each frame have mean zero."""
-    result = set_frames_mean_zero(sample_movie)
-
-    # Check that result has same shape
-    assert result.shape == sample_movie.shape
-
-    # Check that each frame has mean approximately zero
-    for frame_idx in range(result.shape[0]):
-        frame_mean = torch.mean(result[frame_idx])
-        assert torch.abs(frame_mean) < 1e-5, (
-            f"Frame {frame_idx} mean is not zero: {frame_mean}"
-        )
-
-
-def test_set_frames_mean_zero_preserves_differences(sample_movie):
-    """Test that set_frames_mean_zero preserves relative differences within frames."""
-    result = set_frames_mean_zero(sample_movie)
-
-    # The difference between any two pixels in a frame should be preserved
-    # (just shifted by a constant)
-    for frame_idx in range(sample_movie.shape[0]):
-        original_frame = sample_movie[frame_idx]
-        result_frame = result[frame_idx]
-
-        # Difference between first two pixels should be the same
-        diff_original = original_frame[0, 0] - original_frame[0, 1]
-        diff_result = result_frame[0, 0] - result_frame[0, 1]
-        assert torch.allclose(diff_original, diff_result)
-
-
 # Tests for remove_hot_pixels
 def test_remove_hot_pixels_no_hot_pixels(sample_movie):
     """Test remove_hot_pixels with a movie that has no hot pixels."""
@@ -199,6 +167,72 @@ def test_remove_hot_pixels_preserves_shape():
     assert result.shape == movie.shape
 
 
+# Tests for apply_mask
+def test_apply_mask_none(sample_movie):
+    """Test apply_mask with None mask returns original movie."""
+    result = apply_mask(sample_movie, None)
+    assert torch.allclose(result, sample_movie)
+
+
+def test_apply_mask_basic(sample_movie):
+    """Test apply_mask multiplies the mask uniformly into every frame."""
+    mask = torch.zeros(32, 32, dtype=torch.float32)
+    mask[8:24, 8:24] = 1.0
+
+    result = apply_mask(sample_movie, mask)
+    expected = sample_movie * mask
+    assert torch.allclose(result, expected)
+
+    # Every frame should be masked identically
+    for frame_idx in range(result.shape[0]):
+        assert torch.allclose(result[frame_idx], sample_movie[frame_idx] * mask)
+
+
+def test_apply_mask_shape_mismatch(sample_movie):
+    """Test apply_mask raises ValueError when mask shape doesn't match frames."""
+    mask = torch.ones(16, 16, dtype=torch.float32)
+    with pytest.raises(ValueError, match="mask shape"):
+        apply_mask(sample_movie, mask)
+
+
+def test_apply_mask_fill_noise_none_mask_is_noop(sample_movie):
+    """Test fill_noise has no effect when mask is None."""
+    result = apply_mask(sample_movie, None, fill_noise=True)
+    assert torch.allclose(result, sample_movie)
+
+
+def test_apply_mask_fill_noise_replaces_masked_pixels():
+    """Test fill_noise=True replaces mask==0 pixels with per-frame Poisson noise."""
+    torch.manual_seed(0)
+    movie = torch.full((2, 40, 40), 5.0, dtype=torch.float32)
+    mask = torch.zeros(40, 40, dtype=torch.float32)
+    mask[10:30, 10:30] = 1.0  # keep central region, noise-fill everything else
+
+    result = apply_mask(movie, mask, fill_noise=True)
+
+    # In-mask pixels are left untouched
+    assert torch.allclose(result[:, mask == 1], movie[:, mask == 1])
+
+    # Out-of-mask pixels are replaced with samples, not the original constant
+    outside = result[:, mask == 0]
+    assert not torch.allclose(outside, movie[:, mask == 0])
+
+    # Poisson noise should be centered near the central-region lambda (5.0)
+    assert torch.abs(outside.mean() - 5.0) < 1.0
+
+
+def test_apply_mask_fill_noise_lambda_clamped_nonnegative():
+    """Test the Poisson rate is clamped to >= 1.0, so noise stays non-negative."""
+    torch.manual_seed(1)
+    movie = torch.zeros(4, 20, 20, dtype=torch.float32)
+    mask = torch.ones(20, 20, dtype=torch.float32)
+    mask[0:5, 0:5] = 0.0
+
+    result = apply_mask(movie, mask, fill_noise=True)
+    outside = result[:, mask == 0]
+    assert torch.all(outside >= 0)
+
+
 # Tests for prepare_movie (integration)
 def test_prepare_movie_basic(sample_movie, sample_gain_map, sample_dark_map):
     """Test prepare_movie with all components."""
@@ -218,6 +252,60 @@ def test_prepare_movie_basic(sample_movie, sample_gain_map, sample_dark_map):
     for frame_idx in range(result.shape[0]):
         frame_mean = torch.mean(result[frame_idx])
         assert torch.abs(frame_mean) < 1e-5
+
+
+def test_prepare_movie_with_mask(sample_movie, sample_gain_map, sample_dark_map):
+    """Test prepare_movie applies a mask uniformly and stays mean-zero."""
+    mask = torch.zeros(32, 32, dtype=torch.float32)
+    mask[8:24, 8:24] = 1.0
+
+    result = prepare_movie(
+        sample_movie,
+        gain_map=sample_gain_map,
+        dark_map=sample_dark_map,
+        gain_flip=0,
+        gain_rot=0,
+        multiply_gain=True,
+        mask=mask,
+    )
+
+    assert result.shape == sample_movie.shape
+
+    # Mask is applied before the final mean-zero step, so masked-out pixels are
+    # driven to a uniform value (the negated frame mean) rather than staying at 0.
+    for frame_idx in range(result.shape[0]):
+        masked_out = result[frame_idx][mask == 0]
+        assert torch.allclose(masked_out, masked_out[0].expand_as(masked_out))
+
+        frame_mean = torch.mean(result[frame_idx])
+        assert torch.abs(frame_mean) < 1e-5
+
+
+def test_prepare_movie_with_mask_fill_noise(sample_gain_map, sample_dark_map):
+    """Test prepare_movie forwards mask_fill_noise to noise-fill masked pixels."""
+    torch.manual_seed(0)
+    movie = torch.full((3, 32, 32), 5.0, dtype=torch.float32)
+    mask = torch.zeros(32, 32, dtype=torch.float32)
+    mask[8:24, 8:24] = 1.0
+
+    result = prepare_movie(
+        movie,
+        gain_map=None,
+        dark_map=None,
+        gain_flip=0,
+        gain_rot=0,
+        multiply_gain=True,
+        mask=mask,
+        mask_fill_noise=True,
+    )
+
+    assert result.shape == movie.shape
+
+    # Noise-filled pixels should not be uniform across a frame (unlike the
+    # zero-fill case, where masked-out pixels collapse to a single value).
+    for frame_idx in range(result.shape[0]):
+        masked_out = result[frame_idx][mask == 0]
+        assert masked_out.std() > 0
 
 
 def test_prepare_movie_no_gain_no_dark(sample_movie):
@@ -240,39 +328,113 @@ def test_prepare_movie_no_gain_no_dark(sample_movie):
         assert torch.abs(frame_mean) < 1e-5
 
 
-# Tests for prepare_core
-def test_prepare_core_skip_preparation(sample_movie):
-    """Test prepare_core with skip_movie_preparation=True."""
-    result = prepare_core(
+# Tests for prepare_movie crop_bounds
+def test_prepare_movie_crop_bounds_none_is_noop(sample_movie):
+    """Test prepare_movie with crop_bounds=None leaves the frame shape unchanged."""
+    result = prepare_movie(
         sample_movie,
         gain_map=None,
         dark_map=None,
         gain_flip=0,
         gain_rot=0,
         multiply_gain=True,
-        skip_movie_preparation=True,
+        crop_bounds=None,
     )
-
-    # Should return original movie unchanged
-    assert torch.allclose(result, sample_movie)
+    assert result.shape == sample_movie.shape
 
 
-def test_prepare_core_with_preparation(sample_movie, sample_gain_map):
-    """Test prepare_core with skip_movie_preparation=False."""
-    result = prepare_core(
+def test_prepare_movie_crop_bounds_crops_movie(
+    sample_movie, sample_gain_map, sample_dark_map
+):
+    """Test prepare_movie crops the movie (and gain/dark) to the requested bounds."""
+    crop_bounds = {"min_y": 4, "max_y": 19, "min_x": 8, "max_x": 23}
+
+    result = prepare_movie(
         sample_movie,
         gain_map=sample_gain_map,
+        dark_map=sample_dark_map,
+        gain_flip=0,
+        gain_rot=0,
+        multiply_gain=True,
+        crop_bounds=crop_bounds,
+    )
+
+    assert result.shape == (sample_movie.shape[0], 16, 16)
+
+
+def test_prepare_movie_crop_bounds_crops_mask(sample_movie):
+    """Test prepare_movie crops the mask to match the cropped movie before applying."""
+    mask = torch.zeros(32, 32, dtype=torch.float32)
+    mask[8:24, 8:24] = 1.0
+    crop_bounds = {"min_y": 4, "max_y": 19, "min_x": 8, "max_x": 23}
+
+    # Should not raise (mask is cropped to the same (16, 16) shape as the movie
+    # before apply_mask's shape check runs).
+    result = prepare_movie(
+        sample_movie,
+        gain_map=None,
         dark_map=None,
         gain_flip=0,
         gain_rot=0,
         multiply_gain=True,
-        skip_movie_preparation=False,
+        mask=mask,
+        crop_bounds=crop_bounds,
+    )
+    assert result.shape == (sample_movie.shape[0], 16, 16)
+
+
+def test_prepare_movie_crop_bounds_matches_manual_crop(
+    sample_movie, sample_gain_map, sample_dark_map
+):
+    """Test crop_bounds gives the same result as manually cropping before preparing."""
+    crop_bounds = {"min_y": 4, "max_y": 19, "min_x": 8, "max_x": 23}
+
+    cropped_first = prepare_movie(
+        sample_movie[:, 4:20, 8:24],
+        gain_map=sample_gain_map[4:20, 8:24],
+        dark_map=sample_dark_map[4:20, 8:24],
+        gain_flip=0,
+        gain_rot=0,
+        multiply_gain=True,
+    )
+    cropped_via_param = prepare_movie(
+        sample_movie,
+        gain_map=sample_gain_map,
+        dark_map=sample_dark_map,
+        gain_flip=0,
+        gain_rot=0,
+        multiply_gain=True,
+        crop_bounds=crop_bounds,
     )
 
-    # Should have same shape
-    assert result.shape == sample_movie.shape
+    assert torch.allclose(cropped_first, cropped_via_param)
 
-    # Should have mean zero frames (from prepare_movie)
-    for frame_idx in range(result.shape[0]):
-        frame_mean = torch.mean(result[frame_idx])
-        assert torch.abs(frame_mean) < 1e-5
+
+def test_prepare_movie_crop_bounds_applies_reference_flip_before_crop(sample_movie):
+    """Gain/dark flip/rot must run on full references, then crop — not crop then flip."""
+    crop_bounds = {"min_y": 4, "max_y": 19, "min_x": 8, "max_x": 23}
+    # Row-dependent maps so crop-then-flip would not match flip-then-crop.
+    gain_map = torch.arange(32 * 32, dtype=torch.float32).reshape(32, 32)
+    dark_map = torch.arange(32 * 32, dtype=torch.float32).reshape(32, 32) + 1000.0
+
+    gain_aligned = transform_reference_map(gain_map, gain_flip=1, gain_rot=0)
+    dark_aligned = transform_reference_map(dark_map, gain_flip=1, gain_rot=0)
+    reference = prepare_movie(
+        sample_movie[:, 4:20, 8:24],
+        gain_map=gain_aligned[4:20, 8:24],
+        dark_map=dark_aligned[4:20, 8:24],
+        gain_flip=0,
+        gain_rot=0,
+        multiply_gain=True,
+    )
+    result = prepare_movie(
+        sample_movie,
+        gain_map=gain_map,
+        dark_map=dark_map,
+        gain_flip=1,
+        gain_rot=0,
+        multiply_gain=True,
+        crop_bounds=crop_bounds,
+    )
+
+    assert torch.allclose(reference, result)

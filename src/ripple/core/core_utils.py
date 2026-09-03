@@ -5,7 +5,10 @@ from pathlib import Path
 import pandas as pd
 import torch
 import yaml
-from leopard_em.pydantic_models.managers import RefineTemplateManager
+
+# TODO: Open PR in leopard-em lines 17-19 to update imports for torch-motion-correction
+# leopard_em/pydantic_models/data_structures/particle_stack.py
+# from leopard_em.pydantic_models.managers import RefineTemplateManager
 
 
 def get_batch_mean_std_stacks(
@@ -267,9 +270,10 @@ def _create_batch_configs(
     return batch_config_paths, batch_particle_indices
 
 
+# TODO: re-enable
 def _make_differentiable_refine_manager(
     refine_config_path: str,
-) -> RefineTemplateManager:
+) -> "RefineTemplateManager":  # type: ignore[name-defined]
     """
     Make a differentiable refine manager from a particle results path.
 
@@ -283,7 +287,8 @@ def _make_differentiable_refine_manager(
     DifferentiableRefineManager
         The differentiable refine manager.
     """
-    refine_manager = RefineTemplateManager.from_yaml(refine_config_path)
-    # override the movie_params here
-    refine_manager.movie_config.enabled = False
-    return refine_manager
+    pass
+    # refine_manager = RefineTemplateManager.from_yaml(refine_config_path)
+    # # override the movie_params here
+    # refine_manager.movie_config.enabled = False
+    # return refine_manager
