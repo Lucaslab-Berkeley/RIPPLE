@@ -1,10 +1,10 @@
 """Configuration for output files for RIPPLE."""
 
 import os
+from typing import Self
 
 from pydantic import model_validator
 from teamtomo_basemodel import BaseModelTeamTomo
-from typing_extensions import Self
 
 
 def check_file_path_and_permissions(path: str | None, allow_overwrite: bool) -> None:

@@ -15,20 +15,21 @@ sources = ["src"]
 
 # https://peps.python.org/pep-0621/
 [project]
+authors = [
+    { name = "Josh Dickerson", email = "jdickerson@berkeley.edu" },
+    { name = "Matthew Giammar", email = "matthew_giammar@berkeley.edu"}
+]
 name = "RIPPLE"
 dynamic = ["version"]
 description = "Cryo-EM movie frame alignment and polishing. RIPPLE: Realigning image patches and polishing local environment"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = { text = "BSD-3-Clause" }
-authors = [{ name = "Josh Dickerson", email = "jdickerson@berkeley.edu" }]
 # https://pypi.org/classifiers/
 classifiers = [
     "Development Status :: 3 - Alpha",
     "License :: OSI Approved :: BSD License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
@@ -86,10 +87,10 @@ dev = [
     { include-group = "test" },
     "ipython",
     "mypy",
-    "pdbpp",  # https://github.com/pdbpp/pdbpp
+    "pdbpp",                    # https://github.com/pdbpp/pdbpp
     "pre-commit-uv",
     "pre-commit",
-    "rich",  # https://github.com/Textualize/rich
+    "rich",                     # https://github.com/Textualize/rich
     "ruff",
     "pylint",
 ]
@@ -100,7 +101,7 @@ RIPPLE = { workspace = true }
 # https://docs.astral.sh/ruff
 [tool.ruff]
 line-length = 88
-target-version = "py310"
+target-version = "py312"
 src = ["src"]
 fix = true
 # unsafe-fixes = true
@@ -133,7 +134,7 @@ ignore = [
 # https://docs.astral.sh/ruff/formatter/
 [tool.ruff.format]
 docstring-code-format = true
-skip-magic-trailing-comma = false  # default is false
+skip-magic-trailing-comma = false # default is false
 
 # https://docs.pytest.org/
 [tool.pytest.ini_options]
