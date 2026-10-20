@@ -121,7 +121,8 @@ def low_pass_filter(
     torch.Tensor
         Filtered image as a float32 2-D tensor, on `device`.
     """
-    cutoff = 0.5 * pixel_size / low_pass_resolution
+    # bandpass_filter takes cycles/pixel (Nyquist = 0.5).
+    cutoff = pixel_size / low_pass_resolution
     if device is not None:
         image = image.to(device=device, dtype=torch.float32)
     dft = torch.fft.rfft2(image)
