@@ -27,9 +27,11 @@ movie_config:
 
 # --- Beam mask estimation parameters ---
 beam_mask_config:
-  threshold_method: "otsu"      # (optional, default "otsu")   Thresholding algorithm for binarising the low-pass-filtered frame sum. Only "otsu" is currently supported.
+  threshold_method: "sobel"     # (optional, default "sobel")  Ellipse fit method: "sobel" (outermost Sobel edge along rays from the beam centre; robust to dark sample at the rim) or "otsu" (older Otsu threshold + connected component).
   diameter_reduction: 0.0       # (optional, default 0.0)      Fractional shrink applied to both ellipse radii; 0.1 shrinks each axis by 10% to exclude fringe artifacts at the beam edge.
-  low_pass_resolution: 100.0    # (optional, default 100.0)    Low-pass filter cutoff (Angstroms) applied to the frame sum before thresholding.
+  working_pixel_size: 8.0       # (optional, default 8.0)      "sobel" only. Approximate pixel size (Angstroms) the frame sum is binned to before edge detection.
+  edge_smoothing_sigma: 120.0   # (optional, default 120.0)    "sobel" only. Gaussian smoothing sigma (Angstroms) applied before edge detection.
+  low_pass_resolution: 100.0    # (optional, default 100.0)    "otsu" only. Low-pass filter cutoff (Angstroms) applied to the frame sum before thresholding.
 
 # --- Output file configuration ---
 output_config:

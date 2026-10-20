@@ -70,7 +70,9 @@ def computational_config() -> ComputationalConfig:
 
 @pytest.fixture
 def beam_mask_config() -> BeamMaskConfig:
-    return BeamMaskConfig(diameter_reduction=0.05, low_pass_resolution=10.0)
+    return BeamMaskConfig(
+        threshold_method="otsu", diameter_reduction=0.05, low_pass_resolution=10.0
+    )
 
 
 @pytest.fixture
@@ -118,6 +120,7 @@ class TestEstimate:
         # size for this ellipse -- crop_bounds_config.divisible_by must still
         # force both output crop side lengths to a multiple of 3.
         beam_mask_config = BeamMaskConfig(
+            threshold_method="otsu",
             diameter_reduction=0.05,
             low_pass_resolution=10.0,
             crop_bounds_config=CropBoundsConfig(mode="tight", divisible_by=3),
@@ -134,6 +137,66 @@ class TestEstimate:
         output_width = result.output_crop_max_x - result.output_crop_min_x + 1
         assert output_height % 3 == 0
         assert output_width % 3 == 0
+
+
+class TestEstimateSobel:
+    """BeamMaskManager.estimate with the default ``"sobel"`` method."""
+
+    @pytest.fixture
+    def beam_movie(self) -> tuple[np.ndarray, dict]:
+        """Poisson movie of a nearly round beam at 8 A/px, clipped at the top."""
+        ellipse = {
+            "center_y": 100.0,
+            "center_x": 130.0,
+            "axis1": 104.0,
+            "axis2": 100.0,
+            "angle_deg": 40.0,
+        }
+        beam = make_ellipse_mask(shape=(192, 256), **ellipse).astype(np.float32)
+        rng = np.random.default_rng(0)
+        movie = rng.poisson(0.1 + 10.0 * beam, size=(N_FRAMES, *beam.shape))
+        return movie.astype(np.float32), ellipse
+
+    def test_default_config_uses_sobel(self, computational_config, beam_movie):
+        movie, ellipse = beam_movie
+        manager = BeamMaskManager(
+            computational_config=computational_config,
+            movie_config=MovieConfig(
+                pixel_size=8.0, fluence=0.0, fluence_per_frame=0.0
+            ),
+            beam_mask_config=BeamMaskConfig(),
+        )
+
+        result = manager.estimate(movie=torch.from_numpy(movie))
+
+        assert result.threshold_method == "sobel"
+        assert result.n_inliers is not None
+        assert result.n_edge_points is not None
+        assert 0 < result.n_inliers <= result.n_edge_points
+        assert (
+            np.hypot(
+                result.center_y - ellipse["center_y"],
+                result.center_x - ellipse["center_x"],
+            )
+            < 2.0
+        )
+        assert sorted([result.axis1, result.axis2]) == pytest.approx(
+            sorted([ellipse["axis1"], ellipse["axis2"]]), rel=0.02
+        )
+
+    def test_raises_when_no_beam(self, computational_config):
+        rng = np.random.default_rng(0)
+        movie = rng.poisson(1.0, size=(N_FRAMES, 192, 256)).astype(np.float32)
+        manager = BeamMaskManager(
+            computational_config=computational_config,
+            movie_config=MovieConfig(
+                pixel_size=8.0, fluence=0.0, fluence_per_frame=0.0
+            ),
+            beam_mask_config=BeamMaskConfig(),
+        )
+
+        with pytest.raises(ValueError, match="beam"):
+            manager.estimate(movie=torch.from_numpy(movie))
 
 
 class TestSharedTensorComposition:
@@ -173,6 +236,7 @@ class TestSharedTensorComposition:
     ):
         """The beam mask's output_crop_* bounds physically crop the movie."""
         beam_mask_config = BeamMaskConfig(
+            threshold_method="otsu",
             diameter_reduction=0.05,
             low_pass_resolution=10.0,
             crop_bounds_config=CropBoundsConfig(mode="tight"),
