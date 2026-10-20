@@ -1,9 +1,10 @@
 """Configuration for cropping movie frames down to (a region around) a mask."""
 
+from typing import Self
+
 import numpy as np
 from pydantic import model_validator
 from teamtomo_basemodel import BaseModelTeamTomo
-from typing_extensions import Self
 
 from ripple.core.crop_bounds import CropBounds, CropMode, determine_crop_bounds
 
