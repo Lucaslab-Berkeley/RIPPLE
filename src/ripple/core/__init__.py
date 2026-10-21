@@ -1,6 +1,11 @@
 """Core functions for RIPPLE."""
 
-from .beam_mask import estimate_beam_mask, make_ellipse_mask, sum_movie_chunked
+from .beam_mask import (
+    estimate_beam_mask,
+    fit_beam_edge,
+    make_ellipse_mask,
+    sum_movie_chunked,
+)
 from .core_optimize_sigmas import core_optimize_sigmas
 from .core_polish_particles import core_polish_particles
 from .crop_bounds import crop_movie, determine_crop_bounds, get_crop_bounds
@@ -13,6 +18,7 @@ __all__ = [
     "crop_movie",
     "determine_crop_bounds",
     "estimate_beam_mask",
+    "fit_beam_edge",
     "fourier_crop_movie",
     "generate_dose_weighted_image",
     "get_crop_bounds",
