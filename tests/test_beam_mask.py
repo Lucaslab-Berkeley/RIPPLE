@@ -10,12 +10,9 @@ from ripple.core.beam_mask import (
     DEFAULT_N_RAYS,
     estimate_beam_mask,
     fit_beam_edge,
-    fit_ellipse,
     get_crop_bounds,
-    low_pass_filter,
     make_ellipse_mask,
     sum_movie_chunked,
-    threshold_otsu,
 )
 
 HEIGHT = 128
@@ -84,13 +81,6 @@ def _assert_matches_beam(fit, scale: int = 1, rel_tol: float = 0.01) -> None:
     assert np.hypot(fit["center_y"] - cy, fit["center_x"] - cx) < rel_tol * radius
 
 
-def _iou(mask_a: np.ndarray, mask_b: np.ndarray) -> float:
-    """Intersection-over-union of two boolean masks."""
-    intersection = np.logical_and(mask_a, mask_b).sum()
-    union = np.logical_or(mask_a, mask_b).sum()
-    return float(intersection) / float(union)
-
-
 @pytest.fixture
 def ellipse_params() -> dict:
     return {
@@ -140,113 +130,6 @@ class TestSumMovieChunked:
         result = sum_movie_chunked(movie, device=torch.device("cpu"))
         assert result.device == torch.device("cpu")
         assert result.shape == (8, 8)
-
-
-# ---------------------------------------------------------------------------
-# low_pass_filter
-# ---------------------------------------------------------------------------
-
-
-class TestLowPassFilter:
-    """Tests for low_pass_filter."""
-
-    def test_preserves_uniform_image(self):
-        """A constant (DC-only) image should pass through with its mean unchanged."""
-        image = torch.full((HEIGHT, WIDTH), 5.0)
-
-        result = low_pass_filter(image, pixel_size=1.0, low_pass_resolution=20.0)
-
-        assert torch.allclose(result.mean(), image.mean(), atol=1e-3)
-
-    def test_attenuates_high_frequency_noise(self):
-        """Filtering should reduce the variance of pure high-frequency noise."""
-        torch.manual_seed(0)
-        noise = torch.randn(HEIGHT, WIDTH)
-
-        result = low_pass_filter(noise, pixel_size=1.0, low_pass_resolution=20.0)
-
-        assert result.std() < noise.std()
-
-    def test_moves_to_requested_device(self):
-        image = torch.randn(HEIGHT, WIDTH)
-        result = low_pass_filter(
-            image, pixel_size=1.0, low_pass_resolution=20.0, device=torch.device("cpu")
-        )
-        assert result.device == torch.device("cpu")
-
-
-# ---------------------------------------------------------------------------
-# threshold_otsu
-# ---------------------------------------------------------------------------
-
-
-class TestThresholdOtsu:
-    """Tests for threshold_otsu."""
-
-    def test_separates_bimodal_clusters(self):
-        rng = np.random.default_rng(0)
-        low_cluster = rng.normal(loc=0.0, scale=0.5, size=5000)
-        high_cluster = rng.normal(loc=10.0, scale=0.5, size=5000)
-        image = np.concatenate([low_cluster, high_cluster])
-
-        threshold = threshold_otsu(image)
-
-        # The two clusters are well-separated, so any threshold strictly between
-        # them correctly assigns every sample to its true cluster (Otsu may land
-        # anywhere within the near-zero-density gap between the clusters).
-        assert low_cluster.max() < threshold < high_cluster.min()
-
-
-# ---------------------------------------------------------------------------
-# fit_ellipse
-# ---------------------------------------------------------------------------
-
-
-class TestFitEllipse:
-    """Tests for fit_ellipse."""
-
-    def test_recovers_synthetic_ellipse(self, ellipse_params, ellipse_mask):
-        """Fitted ellipse should closely reconstruct the original mask.
-
-        cv2.fitEllipse can report an equivalent ellipse with axis1/axis2 swapped
-        and angle offset by 90 degrees, so compare via mask IoU rather than raw
-        parameters directly.
-        """
-        center_y, center_x, axis1, axis2, angle_deg = fit_ellipse(ellipse_mask)
-
-        refit_mask = make_ellipse_mask(
-            shape=ellipse_params["shape"],
-            center_y=center_y,
-            center_x=center_x,
-            axis1=axis1,
-            axis2=axis2,
-            angle_deg=angle_deg,
-        )
-
-        assert _iou(ellipse_mask, refit_mask) > 0.95
-
-    def test_raises_on_empty_mask(self):
-        empty = np.zeros((HEIGHT, WIDTH), dtype=bool)
-        with pytest.raises(ValueError, match="No connected components"):
-            fit_ellipse(empty)
-
-    def test_falls_back_for_severely_clipped_ellipse(self):
-        """A beam mostly cut off by the frame edge should still fit via the fallback."""
-        mask = make_ellipse_mask(
-            shape=(HEIGHT, WIDTH),
-            center_y=0.0,
-            center_x=0.0,
-            axis1=60.0,
-            axis2=60.0,
-            angle_deg=0.0,
-        )
-
-        center_y, center_x, axis1, axis2, _ = fit_ellipse(mask)
-
-        assert axis1 > 0.0
-        assert axis2 > 0.0
-        assert center_y < HEIGHT / 2
-        assert center_x < WIDTH / 2
 
 
 # ---------------------------------------------------------------------------
@@ -374,27 +257,7 @@ class TestFitBeamEdge:
 class TestEstimateBeamMask:
     """Tests for the estimate_beam_mask orchestration function."""
 
-    def test_full_pipeline_on_synthetic_frame_sum(self, ellipse_mask):
-        frame_sum = torch.from_numpy(ellipse_mask.astype(np.float32)) * 100.0
-
-        result = estimate_beam_mask(
-            frame_sum,
-            pixel_size=1.0,
-            threshold_method="otsu",
-            diameter_reduction=0.1,
-            low_pass_resolution=10.0,
-            device=torch.device("cpu"),
-        )
-
-        assert result["image_shape_y"] == HEIGHT
-        assert result["image_shape_x"] == WIDTH
-        assert result["threshold_method"] == "otsu"
-        assert result["pixel_size"] == 1.0
-        assert result["diameter_reduction"] == 0.1
-        assert 0 <= result["crop_min_y"] < result["crop_max_y"] < HEIGHT
-        assert 0 <= result["crop_min_x"] < result["crop_max_x"] < WIDTH
-
-    def test_sobel_method_on_synthetic_frame_sum(self):
+    def test_full_pipeline_on_synthetic_frame_sum(self):
         frame_sum = torch.from_numpy(_synthetic_beam())
 
         result = estimate_beam_mask(
@@ -402,61 +265,48 @@ class TestEstimateBeamMask:
             pixel_size=BEAM_PIXEL_SIZE,
             threshold_method="sobel",
             diameter_reduction=0.0,
-            low_pass_resolution=100.0,
         )
 
         _assert_matches_beam(result)
         assert result["threshold_method"] == "sobel"
+        assert result["pixel_size"] == BEAM_PIXEL_SIZE
         assert (result["image_shape_y"], result["image_shape_x"]) == BEAM_SHAPE
-        assert result["n_inliers"] is not None
-        assert result["n_edge_points"] is not None
         assert 0 < result["n_inliers"] <= result["n_edge_points"] <= DEFAULT_N_RAYS
         # The beam is clipped top and bottom, but not left and right.
         assert result["crop_min_y"] == 0
         assert result["crop_max_y"] == BEAM_SHAPE[0] - 1
         assert 0 < result["crop_min_x"] < result["crop_max_x"] < BEAM_SHAPE[1] - 1
 
-    def test_sobel_beats_otsu_with_dark_sample_at_rim(self):
-        """Dark sample at the rim notches Otsu's region; the Sobel fit stays round."""
-        frame_sum = torch.from_numpy(_synthetic_beam(gradient=0.6, dark_band=True))
+    def test_diameter_reduction_shrinks_crop_bounds(self):
+        frame_sum = torch.from_numpy(_synthetic_beam())
 
-        def axis_ratio(method: str) -> float:
-            result = estimate_beam_mask(
+        full, shrunk = (
+            estimate_beam_mask(
                 frame_sum,
                 pixel_size=BEAM_PIXEL_SIZE,
-                threshold_method=method,
-                diameter_reduction=0.0,
-                low_pass_resolution=100.0,
+                threshold_method="sobel",
+                diameter_reduction=reduction,
             )
-            axes = sorted([result["axis1"], result["axis2"]])
-            return axes[0] / axes[1]
-
-        true_ratio = BEAM["axis2"] / BEAM["axis1"]
-        assert axis_ratio("sobel") == pytest.approx(true_ratio, abs=0.01)
-        assert axis_ratio("otsu") < true_ratio - 0.02
-
-    def test_otsu_reports_no_edge_counts(self, ellipse_mask):
-        frame_sum = torch.from_numpy(ellipse_mask.astype(np.float32)) * 100.0
-
-        result = estimate_beam_mask(
-            frame_sum,
-            pixel_size=1.0,
-            threshold_method="otsu",
-            diameter_reduction=0.0,
-            low_pass_resolution=10.0,
+            for reduction in (0.0, 0.1)
         )
 
-        assert result["n_edge_points"] is None
-        assert result["n_inliers"] is None
+        assert shrunk["diameter_reduction"] == 0.1
+        # Same fitted ellipse; only the mask and crop bounds shrink.
+        assert shrunk["axis1"] == full["axis1"]
+        assert shrunk["axis2"] == full["axis2"]
+        # A 10 % shrink pulls the ellipse inside the top and bottom of the frame.
+        assert full["crop_min_y"] < shrunk["crop_min_y"]
+        assert shrunk["crop_max_y"] < full["crop_max_y"]
+        assert full["crop_min_x"] < shrunk["crop_min_x"]
+        assert shrunk["crop_max_x"] < full["crop_max_x"]
 
-    def test_raises_on_unsupported_threshold_method(self, ellipse_mask):
-        frame_sum = torch.from_numpy(ellipse_mask.astype(np.float32)) * 100.0
+    def test_raises_on_unsupported_threshold_method(self):
+        frame_sum = torch.from_numpy(_synthetic_beam())
 
         with pytest.raises(ValueError, match="Unsupported threshold_method"):
             estimate_beam_mask(
                 frame_sum,
-                pixel_size=1.0,
-                threshold_method="valley",
+                pixel_size=BEAM_PIXEL_SIZE,
+                threshold_method="otsu",
                 diameter_reduction=0.0,
-                low_pass_resolution=10.0,
             )

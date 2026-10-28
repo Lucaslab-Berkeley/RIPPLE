@@ -16,34 +16,28 @@ class BeamMaskConfig(BaseModelTeamTomo):
 
     Parameters
     ----------
-    threshold_method: Literal["sobel", "otsu"]
+    threshold_method: Literal["sobel"]
         Method used to fit the beam ellipse to the frame sum. ``"sobel"`` fits the
         ellipse to the outermost Sobel edge along rays cast from the beam center, and is
-        robust to dark sample lying across the beam rim. ``"otsu"``thresholds the
-        low-pass-filtered frame sum with Otsu's method and fits the largest connected
-        component.
+        robust to dark sample lying across the beam rim. Currently only ``"sobel"`` is
+        supported. Default is ``"sobel"``.
     diameter_reduction: float
         Fractional amount by which both ellipse radii are shrunk before creating the
         final mask. ``0.0`` applies no reduction; ``0.1`` shrinks each axis by 10% to
         exclude fringe artifacts at the beam edge. Default is 0.0.
-    low_pass_resolution: float
-        Low-pass filter cutoff, in Angstroms, applied to the frame sum before
-        thresholding. Only used by ``"otsu"``. Default is 100.0.
     working_pixel_size: float
         Approximate pixel size, in Angstroms, the frame sum is binned to before edge
-        detection. Only used by ``"sobel"``. Default is 8.0.
+        detection. Default is 8.0.
     edge_smoothing_sigma: float
         Standard deviation, in Angstroms, of the Gaussian smoothing applied to the
-        binned frame sum before edge detection. Only used by ``"sobel"``. Default is
-        120.0.
+        binned frame sum before edge detection. Default is 120.0.
     crop_bounds_config: CropBoundsConfig
         Size policy for cropping movie frames down to the region covered by the beam
         mask. Default disables cropping (``mode="none"``).
     """
 
-    threshold_method: Literal["sobel", "otsu"] = "sobel"
+    threshold_method: Literal["sobel"] = "sobel"
     diameter_reduction: float = 0.0
-    low_pass_resolution: float = 100.0
     working_pixel_size: PositiveFloat = 8.0
     edge_smoothing_sigma: PositiveFloat = 120.0
     crop_bounds_config: CropBoundsConfig = CropBoundsConfig()
@@ -93,16 +87,15 @@ class BeamMaskResult(BaseModelTeamTomo):
     output_crop_max_x: int
         Right column of the output crop region, inclusive.
     threshold_method: str
-        Method used to fit the beam ellipse (``"sobel"`` or ``"otsu"``).
+        Method used to fit the beam ellipse (``"sobel"``).
     pixel_size: float
         Pixel size in Angstroms per pixel.
-    n_edge_points: int | None
-        Number of beam-edge points found by the ``"sobel"`` method (at most one per ray
-        cast). None for ``"otsu"``.
-    n_inliers: int | None
-        Number of edge points kept as beam-rim inliers by the ``"sobel"`` method.
+    n_edge_points: int
+        Number of beam-edge points found (at most one per ray cast).
+    n_inliers: int
+        Number of edge points kept as beam-rim inliers.
         ``n_inliers / ripple.core.beam_mask.DEFAULT_N_RAYS`` is the fraction of the
-        rim that was found. None for ``"otsu"``.
+        rim that was found.
     """
 
     center_y: float
@@ -123,8 +116,8 @@ class BeamMaskResult(BaseModelTeamTomo):
     output_crop_max_x: int
     threshold_method: str
     pixel_size: float
-    n_edge_points: int | None = None
-    n_inliers: int | None = None
+    n_edge_points: int
+    n_inliers: int
 
     @property
     def crop_bounds(self) -> CropBounds:
