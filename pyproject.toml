@@ -58,7 +58,6 @@ dependencies = [
     "h5py",
     "dm4",
     "opencv-python-headless",
-    "scikit-image",
 ]
 
 # https://peps.python.org/pep-0621/#dependencies-optional-dependencies

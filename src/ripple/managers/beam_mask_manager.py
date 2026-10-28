@@ -54,8 +54,8 @@ class BeamMaskManager(BaseModelTeamTomo):
             self.movie_config.pixel_size,
             self.beam_mask_config.threshold_method,
             self.beam_mask_config.diameter_reduction,
-            self.beam_mask_config.low_pass_resolution,
-            device=device,
+            working_pixel_size=self.beam_mask_config.working_pixel_size,
+            edge_smoothing_sigma=self.beam_mask_config.edge_smoothing_sigma,
         )
 
         ellipse_mask = make_ellipse_mask(
