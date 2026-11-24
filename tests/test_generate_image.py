@@ -10,7 +10,9 @@ from torch_fourier_filter.dose_weight import dose_weight_movie
 from ripple.core.generate_image import (
     dose_weight_memory_efficient,
     fourier_crop_movie,
+    fourier_crop_shape,
     generate_dose_weighted_image,
+    generate_summed_images,
     sum_movie,
 )
 
@@ -276,3 +278,120 @@ def test_fourier_crop_movie_all_frames_cropped_consistently():
 
     for i in range(1, 4):
         assert torch.allclose(result[0], result[i])
+
+
+# ---------------------------------------------------------------------------
+# Single-pass summation (accumulated spectra, one inverse FFT per sum)
+# ---------------------------------------------------------------------------
+
+DW_PARAMS = {"pre_exposure": 0.5, "fluence_per_frame": 1.5, "voltage": 300.0}
+
+
+def _per_frame_dw_sum(movie: torch.Tensor, pixel_size: float) -> torch.Tensor:
+    """Reference: dose weight every frame, inverse FFT each frame, then sum."""
+    frame_shape = (movie.shape[-2], movie.shape[-1])
+    movie_dw_dft = dose_weight_movie(
+        movie_dft=torch.fft.rfft2(movie, dim=(-2, -1)),
+        image_shape=frame_shape,
+        pixel_size=pixel_size,
+        pre_exposure=DW_PARAMS["pre_exposure"],
+        dose_per_frame=DW_PARAMS["fluence_per_frame"],
+        voltage=DW_PARAMS["voltage"],
+        crit_exposure_bfactor=-1,
+        rfft=True,
+        fftshift=False,
+    )
+    per_frame = torch.fft.irfft2(movie_dw_dft, s=frame_shape, dim=(-2, -1))
+    return torch.sum(per_frame, dim=0)
+
+
+def _assert_close(result: torch.Tensor, expected: torch.Tensor) -> None:
+    scale = expected.abs().max()
+    assert result.shape == expected.shape
+    assert torch.allclose(result, expected, atol=1e-5 * scale, rtol=0)
+
+
+@pytest.mark.parametrize("shape", [(7, 33, 30), (6, 31, 47)])
+@pytest.mark.parametrize("chunk_size", [1, 3, 8])
+def test_generate_dose_weighted_image_matches_per_frame_inverse_fft(shape, chunk_size):
+    """One inverse FFT of the accumulated spectra equals summing per-frame images."""
+    movie = torch.randn(*shape, generator=torch.Generator().manual_seed(0)) + 3.0
+
+    result = generate_dose_weighted_image(
+        movie, pixel_size=1.1, chunk_size=chunk_size, **DW_PARAMS
+    )
+
+    _assert_close(result, _per_frame_dw_sum(movie, 1.1))
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (5, 64, 48),  # even -> even
+        (5, 66, 50),  # even -> odd
+        (5, 65, 47),  # odd -> even
+        (4, 63, 66),  # mixed parity per axis
+    ],
+)
+@pytest.mark.parametrize("factor", [2, 3])
+def test_generate_summed_images_super_resolution_matches_crop_then_sum(shape, factor):
+    """Per-chunk Fourier crop must match Fourier-cropping the whole movie first."""
+    pixel_size = 0.4
+    movie = torch.randn(*shape, generator=torch.Generator().manual_seed(1)) + 5.0
+    cropped, cropped_pixel_size = fourier_crop_movie(movie, pixel_size, factor)
+
+    dw_image, sum_image, out_pixel_size = generate_summed_images(
+        movie,
+        pixel_size,
+        super_resolution_factor=factor,
+        chunk_size=2,
+        **DW_PARAMS,
+    )
+
+    assert out_pixel_size == cropped_pixel_size
+    _assert_close(dw_image, _per_frame_dw_sum(cropped, cropped_pixel_size))
+    _assert_close(sum_image, torch.sum(cropped, dim=0))
+
+
+def test_generate_summed_images_factor_one_plain_sum_is_exact(sample_movie):
+    dw_image, sum_image, out_pixel_size = generate_summed_images(
+        sample_movie, 1.5, chunk_size=2, **DW_PARAMS
+    )
+
+    assert out_pixel_size == 1.5
+    assert torch.allclose(sum_image, torch.sum(sample_movie, dim=0), atol=1e-6)
+    _assert_close(dw_image, _per_frame_dw_sum(sample_movie, 1.5))
+
+
+@pytest.mark.parametrize("factor", [1, 2])
+def test_generate_summed_images_only_computes_requested(sample_movie, factor):
+    dw_only = generate_summed_images(
+        sample_movie,
+        1.0,
+        super_resolution_factor=factor,
+        non_dose_weighted=False,
+        **DW_PARAMS,
+    )
+    sum_only = generate_summed_images(
+        sample_movie,
+        1.0,
+        super_resolution_factor=factor,
+        dose_weighted=False,
+        **DW_PARAMS,
+    )
+
+    assert dw_only[0] is not None and dw_only[1] is None
+    assert sum_only[0] is None and sum_only[1] is not None
+
+
+@pytest.mark.parametrize("frame_shape", [(32, 32), (33, 31), (65, 47)])
+@pytest.mark.parametrize("factor", [1, 2, 3])
+def test_fourier_crop_shape_matches_fourier_crop_movie(frame_shape, factor):
+    cropped, expected_pixel_size = fourier_crop_movie(
+        torch.zeros(1, *frame_shape), 0.4, factor
+    )
+
+    out_shape, out_pixel_size = fourier_crop_shape(frame_shape, 0.4, factor)
+
+    assert out_shape == tuple(cropped.shape[-2:])
+    assert out_pixel_size == expected_pixel_size

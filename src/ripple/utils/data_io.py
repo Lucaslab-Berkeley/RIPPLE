@@ -15,11 +15,25 @@ import yaml
 from tifffile import TiffFile
 from torch_motion_correction.optimization_state import OptimizationTracker
 
+# Number of output frames `eerfile.render` decodes at a time. Rendering all frames at
+# once needs ~32 GB of RAM for a 4K movie with ~1800 EER frames; 9 frames at a time
+# keeps the peak near 7.5 GB for about 1 s (~15%) more wall time.
+DEFAULT_EER_RENDER_CHUNK_SIZE = 9
+
+# File extensions (lower case) `load_array_from_path` reads, by loader
+MRC_EXTENSIONS = (".mrc", ".mrcs")
+TIFF_EXTENSIONS = (".tif", ".tiff", ".gain", ".dark")
+DM4_EXTENSIONS = (".dm4",)
+
+# File extensions (lower case) accepted as movies, including EER
+MOVIE_EXTENSIONS = (".eer", ".mrc", ".mrcs", ".tif", ".tiff")
+
 
 def render_eer_to_tensor(
     eer_path: str | os.PathLike | Path,
     fluence_per_frame: float,
     total_fluence: float,
+    chunk_size: int | None = DEFAULT_EER_RENDER_CHUNK_SIZE,
 ) -> torch.Tensor:
     """Renders an EER file to a tensor.
 
@@ -31,22 +45,40 @@ def render_eer_to_tensor(
         Fluence per frame in electrons per Angstrom^2/frame.
     total_fluence : float
         Total fluence in electrons per Angstrom^2.
+    chunk_size : int | None
+        Number of output frames decoded at a time. Lower values use less RAM. None
+        decodes every EER frame at once (fastest, but needs tens of GB for a 4K movie).
 
     Returns
     -------
     torch.Tensor
-        The rendered EER data as a tensor.
+        The rendered EER data as a uint16 tensor of electron counts.
     """
     movie_data = eerfile.render(
-        eer_path, dose_per_output_frame=fluence_per_frame, total_fluence=total_fluence
+        eer_path,
+        dose_per_output_frame=fluence_per_frame,
+        total_fluence=total_fluence,
+        chunk_size=chunk_size,
     )
-    return torch.tensor(movie_data, dtype=torch.float32)
+    return _array_to_tensor(movie_data)
+
+
+def _array_to_tensor(array: np.ndarray) -> torch.Tensor:
+    """Wrap `array` as a tensor of the same dtype, without copying where possible.
+
+    ``torch.from_numpy`` shares memory with `array` but needs a writable array in
+    native byte order, so anything else (e.g. big-endian MRC data) is copied first.
+    """
+    if not array.dtype.isnative:
+        array = array.astype(array.dtype.newbyteorder("="))
+    if not array.flags.writeable:
+        array = array.copy()
+    return torch.from_numpy(array)
 
 
 def _load_tiff_array(tif_path: str | os.PathLike | Path) -> np.ndarray:
     with TiffFile(tif_path) as tiff:
-        tif_frames = tiff.asarray()
-    return np.asarray(tif_frames, dtype=np.float32)
+        return tiff.asarray()
 
 
 def _load_mrc_array(mrc_path: str | os.PathLike | Path) -> np.ndarray:
@@ -155,8 +187,8 @@ def load_array_from_path(
     Parameters
     ----------
     file_path : str | os.PathLike | Path
-        Path to the file. Supported extensions: ``.mrc``, ``.tif``, ``.tiff``,
-        ``.gain``, ``.dark``, ``.dm4``.
+        Path to the file. Supported extensions (case-insensitive): ``.mrc``,
+        ``.mrcs``, ``.tif``, ``.tiff``, ``.gain``, ``.dark``, ``.dm4``.
     expected_ndim : int | None
         Expected number of dimensions after optional squeezing. Default None
         skips shape validation.
@@ -166,7 +198,8 @@ def load_array_from_path(
     Returns
     -------
     np.ndarray
-        The loaded data as a float32 array.
+        The loaded data. MRC and TIFF data keep the file's dtype (except float16
+        MRC data, which is promoted to float32); DM4 data is float32.
 
     Raises
     ------
@@ -174,12 +207,13 @@ def load_array_from_path(
         If the file extension is not supported or the shape does not match.
     """
     path_str = str(file_path)
+    path_lower = path_str.lower()
 
-    if path_str.endswith(".mrc"):
+    if path_lower.endswith(MRC_EXTENSIONS):
         array = _load_mrc_array(path_str)
-    elif any(path_str.endswith(ext) for ext in (".tif", ".tiff", ".gain", ".dark")):
+    elif path_lower.endswith(TIFF_EXTENSIONS):
         array = _load_tiff_array(path_str)
-    elif path_str.endswith(".dm4"):
+    elif path_lower.endswith(DM4_EXTENSIONS):
         array = _load_dm4_array(path_str)
     else:
         raise ValueError(f"Unsupported file extension: {file_path}")
@@ -198,14 +232,36 @@ def load_tensor_from_path(
     file_path: str | os.PathLike | Path,
     expected_ndim: int | None = None,
     squeeze: bool = True,
+    dtype: torch.dtype | None = torch.float32,
 ) -> torch.Tensor:
-    """Load an array-like file into memory as a tensor."""
+    """Load an array-like file into memory as a tensor.
+
+    Parameters
+    ----------
+    file_path : str | os.PathLike | Path
+        Path to the file; see :func:`load_array_from_path` for supported extensions.
+    expected_ndim : int | None
+        Expected number of dimensions after optional squeezing. Default None
+        skips shape validation.
+    squeeze : bool
+        Squeeze singleton dimensions before validating shape. Default True.
+    dtype : torch.dtype | None
+        dtype of the returned tensor. Default float32. If None, the loaded dtype is
+        kept (see :func:`load_array_from_path`) and the tensor shares memory with
+        the loaded array, so e.g. an integer-count movie is not copied to float32.
+
+    Returns
+    -------
+    torch.Tensor
+        The loaded data.
+    """
     array = load_array_from_path(
         file_path,
         expected_ndim=expected_ndim,
         squeeze=squeeze,
     )
-    return torch.tensor(array, dtype=torch.float32)
+    tensor = _array_to_tensor(array)
+    return tensor if dtype is None else tensor.to(dtype)
 
 
 def write_trajectory_to_csv(

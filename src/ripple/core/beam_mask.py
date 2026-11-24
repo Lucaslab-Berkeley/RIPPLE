@@ -154,9 +154,10 @@ def make_ellipse_mask(
         )
 
     h, w = shape
-    row_idx, col_idx = np.mgrid[:h, :w]
-    dy: np.ndarray = row_idx.astype(np.float64) - center_y
-    dx: np.ndarray = col_idx.astype(np.float64) - center_x
+    # (h, 1) and (1, w) offsets broadcast to the full grid, so no full-size index
+    # arrays are built. The per-pixel float64 arithmetic is unchanged.
+    dy: np.ndarray = (np.arange(h, dtype=np.float64) - center_y)[:, None]
+    dx: np.ndarray = (np.arange(w, dtype=np.float64) - center_x)[None, :]
 
     theta = np.radians(angle_deg)
     cos_t = float(np.cos(theta))
@@ -165,10 +166,20 @@ def make_ellipse_mask(
     # In screen coordinates (x right, y down), a clockwise rotation of theta
     # from the horizontal maps the pixel offset (dx, dy) onto the two ellipse
     # axes as follows:
-    proj1: np.ndarray = dx * cos_t + dy * sin_t
+    #   proj1 = dx * cos_t + dy * sin_t
+    #   proj2 = -dx * sin_t + dy * cos_t
+    # and the pixel is inside if (proj1 / semi1)^2 + (proj2 / semi2)^2 <= 1.
+    # Computed in place to limit full-size float64 temporaries.
+    quad: np.ndarray = dx * cos_t + dy * sin_t
+    quad /= semi1
+    quad *= quad
     proj2: np.ndarray = -dx * sin_t + dy * cos_t
+    proj2 /= semi2
+    proj2 *= proj2
+    quad += proj2
+    del proj2
 
-    inside: np.ndarray = (proj1 / semi1) ** 2 + (proj2 / semi2) ** 2 <= 1.0
+    inside: np.ndarray = quad <= 1.0
     return inside
 
 
@@ -468,7 +479,9 @@ def estimate_beam_mask(
 
     Bins and Gaussian-smooths `frame_sum`, fits the ellipse to the outermost Sobel
     edge along rays cast from the beam center (see :func:`fit_beam_edge`), and
-    computes the tight crop bounds for the (possibly shrunk) ellipse mask.
+    computes the tight crop bounds for the (possibly shrunk) ellipse mask. Use
+    :func:`estimate_beam_mask_and_mask` to also get that mask without rasterising it
+    again.
 
     Parameters
     ----------
@@ -493,6 +506,56 @@ def estimate_beam_mask(
     -------
     BeamMaskParams
         Fitted ellipse and tight crop bounds.
+
+    Raises
+    ------
+    ValueError
+        If `threshold_method` is not ``"sobel"``, or if no beam can be found in
+        `frame_sum`.
+    """
+    params, _ = estimate_beam_mask_and_mask(
+        frame_sum,
+        pixel_size,
+        threshold_method,
+        diameter_reduction,
+        working_pixel_size=working_pixel_size,
+        edge_smoothing_sigma=edge_smoothing_sigma,
+    )
+    return params
+
+
+def estimate_beam_mask_and_mask(
+    frame_sum: torch.Tensor,
+    pixel_size: float,
+    threshold_method: str,
+    diameter_reduction: float,
+    working_pixel_size: float = 8.0,
+    edge_smoothing_sigma: float = 120.0,
+) -> tuple[BeamMaskParams, np.ndarray]:
+    """Like :func:`estimate_beam_mask`, but also return the rasterised mask.
+
+    Parameters
+    ----------
+    frame_sum : torch.Tensor
+        2-D tensor, sum of all raw movie frames.
+    pixel_size : float
+        Pixel size in Angstroms per pixel.
+    threshold_method : str
+        Ellipse estimation method; currently only ``"sobel"`` is supported.
+    diameter_reduction : float
+        Fractional shrink applied to both ellipse radii.
+    working_pixel_size : float
+        Approximate pixel size, in Angstroms, `frame_sum` is binned to before edge
+        detection.
+    edge_smoothing_sigma : float
+        Standard deviation, in Angstroms, of the Gaussian smoothing applied before edge
+        detection.
+
+    Returns
+    -------
+    tuple[BeamMaskParams, np.ndarray]
+        Fitted ellipse and tight crop bounds, and the boolean ``(height, width)``
+        mask they describe (:func:`make_ellipse_mask` of the returned parameters).
 
     Raises
     ------
@@ -527,7 +590,7 @@ def estimate_beam_mask(
 
     min_y, max_y, min_x, max_x = get_crop_bounds(ellipse_mask)
 
-    return {
+    params: BeamMaskParams = {
         "center_y": fit["center_y"],
         "center_x": fit["center_x"],
         "axis1": fit["axis1"],
@@ -545,3 +608,4 @@ def estimate_beam_mask(
         "n_edge_points": fit["n_edge_points"],
         "n_inliers": fit["n_inliers"],
     }
+    return params, ellipse_mask

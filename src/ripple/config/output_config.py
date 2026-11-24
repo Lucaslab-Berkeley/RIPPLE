@@ -36,7 +36,13 @@ def check_file_path_and_permissions(path: str | None, allow_overwrite: bool) -> 
 
 
 class OutputConfig(BaseModelTeamTomo):
-    """Configuration for output files for RIPPLE."""
+    """Configuration for output files for RIPPLE.
+
+    Paths are checked once at construction. Paths assigned afterwards (e.g. the
+    per-movie paths set by the directory scripts) are not; call
+    :meth:`check_output_paths` before starting work that writes them. The managers do
+    this at the start of a run and again before writing any output.
+    """
 
     allow_file_overwrite: bool = True
     dw_sum_output_path: str | None = None
@@ -45,6 +51,44 @@ class OutputConfig(BaseModelTeamTomo):
     rendered_movie_output_path: str | None = None
     non_dw_sum_output_path: str | None = None
     loss_trajectories_output_path: str | None = None
+
+    @property
+    def output_paths(self) -> list[str]:
+        """All configured (non-None) output paths."""
+        paths = [
+            self.dw_sum_output_path,
+            self.deformation_field_output_path,
+            self.motion_corrected_movie_output_path,
+            self.rendered_movie_output_path,
+            self.non_dw_sum_output_path,
+            self.loss_trajectories_output_path,
+        ]
+        return [path for path in paths if path is not None]
+
+    def existing_output_paths(self) -> list[str]:
+        """Return the configured output paths that already exist on disk.
+
+        Returns
+        -------
+        list[str]
+            Subset of :attr:`output_paths` that already exist.
+        """
+        return [path for path in self.output_paths if os.path.exists(path)]
+
+    def check_output_paths(self) -> None:
+        """Check every configured output path can be written.
+
+        Creates missing parent directories, checks they are writable, and, if
+        `allow_file_overwrite` is False, checks that no output already exists.
+
+        Raises
+        ------
+        ValueError
+            If an output directory is not writable, or an output already exists while
+            `allow_file_overwrite` is False.
+        """
+        for path in self.output_paths:
+            check_file_path_and_permissions(path, self.allow_file_overwrite)
 
     @model_validator(mode="after")  # type: ignore
     def validate_paths(self) -> Self:
@@ -63,16 +107,5 @@ class OutputConfig(BaseModelTeamTomo):
         ValueError
             If the output paths are not writable or do not permit overwriting.
         """
-        # 1. Check write permissions and overwriting for each path
-        paths = [
-            self.dw_sum_output_path,
-            self.deformation_field_output_path,
-            self.motion_corrected_movie_output_path,
-            self.rendered_movie_output_path,
-            self.non_dw_sum_output_path,
-            self.loss_trajectories_output_path,
-        ]
-        for path in paths:
-            check_file_path_and_permissions(path, self.allow_file_overwrite)
-
+        self.check_output_paths()
         return self

@@ -114,7 +114,7 @@ class AlignFramesConfig(BaseAlignmentConfig):
     Parameters
     ----------
     patch_shape: tuple[int, int]
-        Shape of the patch in pixels (width, height). Default is (1024, 1024).
+        Shape of the patch in pixels (height, width). Default is (1024, 1024).
     loss_type: Literal["mse", "cc", "ncc"]
         Type of loss function. Must be 'mse' (mean square error), 'cc'
         (cross correlation), or 'ncc' (normalized cross correlation).

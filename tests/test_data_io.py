@@ -9,6 +9,7 @@ import torch
 from tifffile import imwrite
 
 from ripple.config.movie_config import MovieConfig
+from ripple.utils import data_io
 from ripple.utils.data_io import (
     load_array_from_path,
     load_tensor_from_path,
@@ -312,3 +313,129 @@ def test_write_mrc_from_tensor_no_pixel_size_leaves_voxel_size_zero(tmp_path):
 
     with mrcfile.open(str(path)) as mrc:
         assert mrc.voxel_size.x == 0
+
+
+# ---------------------------------------------------------------------------
+# File extensions (case-insensitive, .mrcs)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["movie.mrcs", "movie.MRC", "movie.MRCS"])
+def test_load_tensor_from_path_mrc_extensions(tmp_path, movie_data, name):
+    path = tmp_path / name
+    with mrcfile.new(str(path), overwrite=True) as mrc:
+        mrc.set_data(movie_data)
+    result = load_tensor_from_path(path, expected_ndim=3)
+    assert torch.allclose(result, torch.tensor(movie_data))
+
+
+@pytest.mark.parametrize("name", ["movie.TIF", "movie.TIFF", "movie.Tiff"])
+def test_load_tensor_from_path_tiff_extensions(tmp_path, movie_data, name):
+    path = tmp_path / name
+    imwrite(str(path), movie_data, photometric="minisblack")
+    result = load_tensor_from_path(path, expected_ndim=3)
+    assert torch.allclose(result, torch.tensor(movie_data))
+
+
+@pytest.mark.parametrize("name", ["movie.mrcs", "movie.TIFF"])
+def test_movie_config_movie_accepts_extension(tmp_path, movie_data, name):
+    path = tmp_path / name
+    if name.endswith("mrcs"):
+        with mrcfile.new(str(path), overwrite=True) as mrc:
+            mrc.set_data(movie_data)
+    else:
+        imwrite(str(path), movie_data, photometric="minisblack")
+    cfg = MovieConfig(**_base_movie_config_kwargs(movie_path=str(path)))
+    assert torch.allclose(cfg.movie, torch.tensor(movie_data))
+
+
+# ---------------------------------------------------------------------------
+# Native dtype on load
+# ---------------------------------------------------------------------------
+
+
+def test_movie_config_movie_keeps_native_tiff_dtype(tmp_path):
+    counts = np.random.default_rng(0).integers(0, 200, (6, 16, 16), dtype=np.uint8)
+    path = tmp_path / "movie.tif"
+    imwrite(str(path), counts, photometric="minisblack")
+    cfg = MovieConfig(**_base_movie_config_kwargs(movie_path=str(path)))
+
+    result = cfg.movie
+
+    assert result.dtype == torch.uint8
+    assert np.array_equal(result.numpy(), counts)
+
+
+@pytest.mark.parametrize("dtype", [np.int8, np.int16, np.uint16])
+def test_movie_config_movie_keeps_native_mrc_dtype(tmp_path, dtype):
+    counts = np.random.default_rng(0).integers(0, 100, (6, 16, 16)).astype(dtype)
+    path = tmp_path / "movie.mrc"
+    with mrcfile.new(str(path), overwrite=True) as mrc:
+        mrc.set_data(counts)
+    cfg = MovieConfig(**_base_movie_config_kwargs(movie_path=str(path)))
+
+    result = cfg.movie
+
+    assert result.dtype == torch.from_numpy(counts).dtype
+    assert np.array_equal(result.numpy(), counts)
+
+
+def test_gain_stays_float32_for_integer_file(tmp_path):
+    """Gain/dark/mask references are still converted to float32 on load."""
+    gain = np.full((16, 16), 3, dtype=np.uint8)
+    path = tmp_path / "gain.tif"
+    imwrite(str(path), gain)
+    cfg = MovieConfig(**_base_movie_config_kwargs(gain_path=str(path)))
+    assert cfg.gain.dtype == torch.float32
+    assert torch.all(cfg.gain == 3.0)
+
+
+def test_load_tensor_from_path_dtype_none_shares_memory(tmp_path, movie_data):
+    path = tmp_path / "movie.tif"
+    imwrite(str(path), movie_data, photometric="minisblack")
+    result = load_tensor_from_path(path, expected_ndim=3, dtype=None)
+    assert result.dtype == torch.float32
+    assert torch.allclose(result, torch.tensor(movie_data))
+
+
+@pytest.mark.parametrize(
+    "array",
+    [
+        np.arange(12, dtype=">i2").reshape(3, 4),  # big-endian
+        np.arange(12, dtype=np.uint16).reshape(3, 4),
+    ],
+)
+def test_array_to_tensor_handles_byte_order_and_read_only(array):
+    array.flags.writeable = False
+    result = data_io._array_to_tensor(array)
+    assert np.array_equal(result.numpy(), array)
+
+
+# ---------------------------------------------------------------------------
+# EER rendering
+# ---------------------------------------------------------------------------
+
+
+def test_movie_config_eer_passes_chunk_size_and_keeps_uint16(monkeypatch):
+    calls = []
+
+    def _fake_render(path, **kwargs):
+        calls.append((path, kwargs))
+        return np.ones((3, 8, 8), dtype=np.uint16)
+
+    monkeypatch.setattr(data_io.eerfile, "render", _fake_render)
+    cfg = MovieConfig(
+        **_base_movie_config_kwargs(movie_path="movie.EER", eer_render_chunk_size=4)
+    )
+
+    result = cfg.movie
+
+    assert result.dtype == torch.uint16
+    assert calls[0][1]["chunk_size"] == 4
+    assert calls[0][1]["dose_per_output_frame"] == 2.0
+    assert calls[0][1]["total_fluence"] == 40.0
+
+
+def test_movie_config_eer_chunk_size_default():
+    cfg = MovieConfig(**_base_movie_config_kwargs())
+    assert cfg.eer_render_chunk_size == data_io.DEFAULT_EER_RENDER_CHUNK_SIZE

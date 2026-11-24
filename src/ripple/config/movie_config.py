@@ -7,7 +7,11 @@ from teamtomo_basemodel import BaseModelTeamTomo
 from ripple.config.crop_bounds_config import CropBoundsConfig
 from ripple.core.crop_bounds import CropBounds
 from ripple.core.prepare_movie import DEFAULT_PREP_CHUNK_SIZE, prepare_movie
-from ripple.utils.data_io import load_tensor_from_path, render_eer_to_tensor
+from ripple.utils.data_io import (
+    DEFAULT_EER_RENDER_CHUNK_SIZE,
+    load_tensor_from_path,
+    render_eer_to_tensor,
+)
 
 
 class MovieConfig(BaseModelTeamTomo):
@@ -16,7 +20,8 @@ class MovieConfig(BaseModelTeamTomo):
     Parameters
     ----------
     movie_path: str
-        Path to the movie file.
+        Path to the movie file (``.eer``, ``.mrc``, ``.mrcs``, ``.tif`` or ``.tiff``;
+        case-insensitive).
     pixel_size: float
         Pixel size of the movie, as collected, in Angstroms per pixel.
     super_resolution_factor: int
@@ -59,6 +64,10 @@ class MovieConfig(BaseModelTeamTomo):
     multiply_gain: bool
         Whether to multiply the movie by the gain map or divide the movie by the
         gain map. Default is True.
+    eer_render_chunk_size: int | None
+        Number of output frames decoded at a time when rendering an EER movie. Lower
+        values use less RAM. None decodes all EER frames at once (fastest, but needs
+        tens of GB for a 4K movie). Default is 9. Ignored for other movie formats.
     """
 
     movie_path: str | None = None
@@ -76,6 +85,7 @@ class MovieConfig(BaseModelTeamTomo):
     mask_path: str | None = None
     mask_fill_noise: bool = False
     crop_bounds_config: CropBoundsConfig = CropBoundsConfig()
+    eer_render_chunk_size: PositiveInt | None = DEFAULT_EER_RENDER_CHUNK_SIZE
 
     @field_validator("gain_flip")  # type: ignore[misc]
     @classmethod
@@ -109,7 +119,7 @@ class MovieConfig(BaseModelTeamTomo):
         Parameters
         ----------
         movie : torch.Tensor
-            Raw movie tensor (frames x height x width).
+            Raw movie tensor (frames x height x width), of any real dtype.
         gain_map : torch.Tensor | None
             Gain map tensor. If None, gain correction is skipped.
         dark_map : torch.Tensor | None
@@ -182,14 +192,21 @@ class MovieConfig(BaseModelTeamTomo):
 
     @property
     def movie(self) -> torch.Tensor:
-        """Get the movie tensor."""
+        """Get the raw movie tensor, in the file's dtype (e.g. uint16 for EER).
+
+        The movie is not converted to float32 here; :meth:`prepare` converts it a
+        chunk of frames at a time.
+        """
         if not self.movie_path:
             raise ValueError("Movie path is not set.")
-        if self.movie_path.endswith(".eer"):
+        if self.movie_path.lower().endswith(".eer"):
             return render_eer_to_tensor(
-                self.movie_path, self.fluence_per_frame, self.fluence
+                self.movie_path,
+                self.fluence_per_frame,
+                self.fluence,
+                chunk_size=self.eer_render_chunk_size,
             )
-        return load_tensor_from_path(self.movie_path, expected_ndim=3)
+        return load_tensor_from_path(self.movie_path, expected_ndim=3, dtype=None)
 
     @staticmethod
     def _load_2d(path: str | None) -> torch.Tensor | None:

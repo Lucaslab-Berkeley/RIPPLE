@@ -443,3 +443,48 @@ class TestCorrectAndSave:
         assert args[3] == "DEFORMATION_FIELD"
         assert args[4] is movie
         assert args[5] == "TRAJECTORY"
+
+
+# ---------------------------------------------------------------------------
+# Output checks before any work
+# ---------------------------------------------------------------------------
+
+
+class TestOutputChecks:
+    """Outputs assigned after construction are checked before any alignment work."""
+
+    @pytest.fixture
+    def guarded_manager(self, manager, tmp_path):
+        manager.output_config.allow_file_overwrite = False
+        # Assigned after construction, like the per-movie paths in the scripts
+        manager.output_config.deformation_field_output_path = str(
+            tmp_path / "field.csv"
+        )
+        (tmp_path / "field.csv").write_text("keep me")
+        return manager
+
+    def test_prepare_movie_raises_before_loading(self, guarded_manager):
+        guarded_manager.movie_config.movie_path = "/nonexistent/never-read.mrc"
+        with pytest.raises(ValueError, match="already exists"):
+            guarded_manager.prepare_movie()
+
+    def test_estimate_motion_raises_before_estimation(
+        self, guarded_manager, monkeypatch
+    ):
+        calls = []
+        monkeypatch.setattr(
+            afm_module, "estimate_global_motion", lambda **kw: calls.append(kw)
+        )
+        monkeypatch.setattr(
+            afm_module, "estimate_local_motion", lambda **kw: calls.append(kw)
+        )
+        with pytest.raises(ValueError, match="already exists"):
+            guarded_manager.estimate_motion(torch.randn(N_FRAMES, HEIGHT, WIDTH))
+        assert not calls
+
+    def test_prepare_movie_runs_when_outputs_free(self, manager, tmp_path):
+        manager.output_config.allow_file_overwrite = False
+        manager.output_config.dw_sum_output_path = str(tmp_path / "out" / "dw.mrc")
+        result = manager.prepare_movie()
+        assert result.shape == (N_FRAMES, HEIGHT, WIDTH)
+        assert (tmp_path / "out").is_dir()

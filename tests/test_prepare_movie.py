@@ -217,7 +217,7 @@ def test_apply_mask_fill_noise_replaces_masked_pixels():
     outside = result[:, mask == 0]
     assert not torch.allclose(outside, movie[:, mask == 0])
 
-    # Poisson noise should be centered near the central-region lambda (5.0)
+    # Poisson noise should be centered near the in-mask lambda (5.0)
     assert torch.abs(outside.mean() - 5.0) < 1.0
 
 
@@ -411,7 +411,7 @@ def test_prepare_movie_crop_bounds_matches_manual_crop(
 
 
 def test_prepare_movie_crop_bounds_applies_reference_flip_before_crop(sample_movie):
-    """Gain/dark flip/rot must run on full references, then crop — not crop then flip."""
+    """Gain/dark flip/rot must run on full references, then crop, not crop then flip."""
     crop_bounds = {"min_y": 4, "max_y": 19, "min_x": 8, "max_x": 23}
     # Row-dependent maps so crop-then-flip would not match flip-then-crop.
     gain_map = torch.arange(32 * 32, dtype=torch.float32).reshape(32, 32)
@@ -438,3 +438,105 @@ def test_prepare_movie_crop_bounds_applies_reference_flip_before_crop(sample_mov
     )
 
     assert torch.allclose(reference, result)
+
+
+# Tests for the order of dark and gain correction
+@pytest.mark.parametrize("multiply_gain", [True, False])
+def test_prepare_movie_subtracts_dark_before_gain(multiply_gain):
+    """Dark is an offset of the raw counts: (raw - dark) * gain, or / gain."""
+    generator = torch.Generator().manual_seed(0)
+    raw = 10.0 + torch.rand(3, 32, 32, generator=generator)
+    # Non-flat gain and dark, so the wrong order is not just a constant offset
+    gain = 0.5 + torch.rand(32, 32, generator=generator)
+    dark = 2.0 * torch.rand(32, 32, generator=generator)
+
+    result = prepare_movie(
+        raw,
+        gain_map=gain,
+        dark_map=dark,
+        gain_flip=0,
+        gain_rot=0,
+        multiply_gain=multiply_gain,
+    )
+
+    corrected = (raw - dark) * gain if multiply_gain else (raw - dark) / gain
+    expected = corrected - corrected.mean(dim=(1, 2), keepdim=True)
+    assert torch.allclose(result, expected, atol=1e-5)
+
+    # The old order (gain first, then dark) gives a measurably different result
+    wrong = raw * gain - dark if multiply_gain else raw / gain - dark
+    wrong = wrong - wrong.mean(dim=(1, 2), keepdim=True)
+    assert not torch.allclose(result, wrong, atol=1e-2)
+
+
+# Tests for leaving the input movie untouched
+def test_prepare_movie_does_not_modify_float32_input():
+    """A float32 movie with no gain/dark/mask/hot pixels must not be mean-zeroed in
+    place (the per-chunk cast and every correction step are then no-ops)."""
+    movie = torch.rand(4, 32, 32) + 5.0
+    original = movie.clone()
+
+    result = prepare_movie(movie, None, None, gain_flip=0, gain_rot=0, chunk_size=2)
+
+    assert torch.equal(movie, original)
+    assert torch.allclose(result, movie - movie.mean(dim=(1, 2), keepdim=True))
+
+
+def test_prepare_movie_does_not_modify_float32_input_with_crop():
+    movie = torch.rand(4, 32, 32) + 5.0
+    original = movie.clone()
+
+    prepare_movie(
+        movie,
+        None,
+        None,
+        gain_flip=0,
+        gain_rot=0,
+        crop_bounds={"min_y": 4, "max_y": 19, "min_x": 8, "max_x": 23},
+    )
+
+    assert torch.equal(movie, original)
+
+
+# Tests for integer (native dtype) input movies
+@pytest.mark.parametrize("dtype", [torch.uint8, torch.int8, torch.int16, torch.uint16])
+def test_prepare_movie_integer_movie_matches_float32(dtype):
+    """Integer counts are cast per chunk; the result must equal float32 input."""
+    generator = torch.Generator().manual_seed(0)
+    counts = torch.randint(0, 100, (5, 32, 32), generator=generator)
+    gain = 0.5 + torch.rand(32, 32, generator=generator)
+    dark = torch.rand(32, 32, generator=generator)
+
+    from_int = prepare_movie(counts.to(dtype), gain, dark, 0, 0, chunk_size=2)
+    from_float = prepare_movie(counts.to(torch.float32), gain, dark, 0, 0, chunk_size=2)
+
+    assert from_int.dtype == torch.float32
+    assert torch.equal(from_int, from_float)
+
+
+# Tests for the noise-fill level
+def test_apply_mask_fill_noise_level_from_in_mask_pixels():
+    """The Poisson rate comes from pixels inside the mask, not the frame centre."""
+    torch.manual_seed(0)
+    movie = torch.zeros(2, 40, 40, dtype=torch.float32)
+    mask = torch.zeros(40, 40, dtype=torch.float32)
+    # Off-centre mask: the central 50% box lies entirely outside it
+    mask[:, :8] = 1.0
+    movie[:, :, :8] = 100.0
+
+    result = apply_mask(movie, mask, fill_noise=True)
+
+    outside = result[:, mask == 0]
+    assert torch.abs(outside.mean() - 100.0) < 2.0
+    assert torch.equal(result[:, mask == 1], movie[:, mask == 1])
+
+
+def test_apply_mask_fill_noise_empty_mask_uses_whole_frame():
+    torch.manual_seed(0)
+    movie = torch.zeros(2, 40, 40, dtype=torch.float32)
+    movie[:, :, :10] = 40.0  # whole-frame mean 10, central 50% box mean 0
+    mask = torch.zeros(40, 40, dtype=torch.float32)
+
+    result = apply_mask(movie, mask, fill_noise=True)
+
+    assert torch.abs(result.mean() - 10.0) < 0.5

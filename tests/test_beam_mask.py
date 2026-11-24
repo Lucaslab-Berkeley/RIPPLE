@@ -6,9 +6,11 @@ import numpy as np
 import pytest
 import torch
 
+from ripple.core import beam_mask as beam_mask_module
 from ripple.core.beam_mask import (
     DEFAULT_N_RAYS,
     estimate_beam_mask,
+    estimate_beam_mask_and_mask,
     fit_beam_edge,
     get_crop_bounds,
     make_ellipse_mask,
@@ -173,6 +175,25 @@ class TestMakeEllipseMask:
         # Shrunk mask should be fully contained within the original.
         assert np.logical_and(shrunk, ~ellipse_mask).sum() == 0
 
+    def test_matches_dense_float64_grid(self):
+        """Broadcast rasterisation must match the dense float64 index-grid version."""
+        rng = np.random.default_rng(0)
+        for _ in range(100):
+            h, w = (int(n) for n in rng.integers(20, 300, size=2))
+            params = {
+                "center_y": rng.uniform(0, h),
+                "center_x": rng.uniform(0, w),
+                "axis1": rng.uniform(5, 200),
+                "axis2": rng.uniform(5, 200),
+                "angle_deg": rng.uniform(-180, 180),
+                "diameter_reduction": rng.uniform(0, 0.5),
+            }
+
+            result = make_ellipse_mask(shape=(h, w), **params)
+
+            assert result.dtype == np.bool_
+            assert np.array_equal(result, _dense_ellipse_mask((h, w), **params))
+
     def test_raises_when_diameter_reduction_collapses_axis(self, ellipse_params):
         with pytest.raises(ValueError, match="diameter_reduction"):
             make_ellipse_mask(**ellipse_params, diameter_reduction=1.0)
@@ -254,8 +275,66 @@ class TestFitBeamEdge:
 # ---------------------------------------------------------------------------
 
 
+def _dense_ellipse_mask(
+    shape, center_y, center_x, axis1, axis2, angle_deg, diameter_reduction
+):
+    """Reference rasteriser: full-size float64 index grids."""
+    semi1 = axis1 * (1.0 - diameter_reduction)
+    semi2 = axis2 * (1.0 - diameter_reduction)
+    row_idx, col_idx = np.mgrid[: shape[0], : shape[1]]
+    dy = row_idx.astype(np.float64) - center_y
+    dx = col_idx.astype(np.float64) - center_x
+    theta = np.radians(angle_deg)
+    cos_t, sin_t = float(np.cos(theta)), float(np.sin(theta))
+    proj1 = dx * cos_t + dy * sin_t
+    proj2 = -dx * sin_t + dy * cos_t
+    return (proj1 / semi1) ** 2 + (proj2 / semi2) ** 2 <= 1.0
+
+
 class TestEstimateBeamMask:
     """Tests for the estimate_beam_mask orchestration function."""
+
+    def test_and_mask_variant_returns_params_mask(self, monkeypatch):
+        frame_sum = torch.from_numpy(_synthetic_beam())
+        calls = []
+        original = beam_mask_module.make_ellipse_mask
+
+        def _counting(*args, **kwargs):
+            calls.append(kwargs)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(beam_mask_module, "make_ellipse_mask", _counting)
+
+        params, mask = estimate_beam_mask_and_mask(
+            frame_sum,
+            pixel_size=BEAM_PIXEL_SIZE,
+            threshold_method="sobel",
+            diameter_reduction=0.05,
+        )
+
+        assert len(calls) == 1
+        assert params == estimate_beam_mask(
+            frame_sum,
+            pixel_size=BEAM_PIXEL_SIZE,
+            threshold_method="sobel",
+            diameter_reduction=0.05,
+        )
+        expected = original(
+            shape=BEAM_SHAPE,
+            center_y=params["center_y"],
+            center_x=params["center_x"],
+            axis1=params["axis1"],
+            axis2=params["axis2"],
+            angle_deg=params["angle_deg"],
+            diameter_reduction=0.05,
+        )
+        assert np.array_equal(mask, expected)
+        assert get_crop_bounds(mask) == (
+            params["crop_min_y"],
+            params["crop_max_y"],
+            params["crop_min_x"],
+            params["crop_max_x"],
+        )
 
     def test_full_pipeline_on_synthetic_frame_sum(self):
         frame_sum = torch.from_numpy(_synthetic_beam())

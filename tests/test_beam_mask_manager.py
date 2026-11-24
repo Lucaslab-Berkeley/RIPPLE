@@ -15,6 +15,7 @@ from ripple.config import (
     MovieConfig,
     OutputConfig,
 )
+from ripple.core import beam_mask as beam_mask_module
 from ripple.core.beam_mask import make_ellipse_mask
 from ripple.managers import AlignFramesManager, BeamMaskManager
 
@@ -155,6 +156,37 @@ class TestEstimate:
 
         with pytest.raises(ValueError, match="beam"):
             manager.estimate(movie=torch.from_numpy(movie))
+
+
+class TestEstimateWithMask:
+    """Tests for BeamMaskManager.estimate_with_mask."""
+
+    def test_mask_rasterised_once_and_matches_to_mask(
+        self, manager, movie_array, monkeypatch
+    ):
+        calls = []
+        original = beam_mask_module.make_ellipse_mask
+
+        def _counting(*args, **kwargs):
+            calls.append(kwargs)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(beam_mask_module, "make_ellipse_mask", _counting)
+
+        result, mask = manager.estimate_with_mask(movie=torch.from_numpy(movie_array))
+
+        assert len(calls) == 1
+        assert mask.dtype == torch.bool
+        assert torch.equal(mask, result.to_mask())
+        assert result == manager.estimate(movie=torch.from_numpy(movie_array))
+
+    def test_integer_movie_gives_same_result(self, manager, movie_array):
+        """Raw movies are now loaded in their native (integer) dtype."""
+        from_float = manager.estimate(movie=torch.from_numpy(movie_array))
+        from_int = manager.estimate(
+            movie=torch.from_numpy(movie_array.astype(np.uint16))
+        )
+        assert from_int == from_float
 
 
 class TestSharedTensorComposition:
