@@ -165,6 +165,10 @@ module = ["yaml", "yaml.*"]
 ignore_missing_imports = true
 
 # https://coverage.readthedocs.io/
+[tool.pylint.typecheck]
+# OpenCV creates its members when the extension loads, so pylint cannot see them
+generated-members = ["cv2.*"]
+
 [tool.coverage.report]
 show_missing = true
 exclude_lines = [

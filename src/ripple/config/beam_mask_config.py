@@ -1,5 +1,9 @@
 """Configuration and result models for DeCo-LACE beam mask estimation."""
 
+# BeamMaskResult has the fields of ripple.core.beam_mask.BeamMaskParams, the dict it
+# is built from, which pylint reports as duplicate code
+# pylint: disable=duplicate-code
+
 from typing import Literal
 
 import torch

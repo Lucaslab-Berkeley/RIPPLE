@@ -268,7 +268,7 @@ def remove_hot_pixels(movie: torch.Tensor, threshold: float = 10.0) -> torch.Ten
         return movie
 
     kernel = _NEIGHBOR_AVERAGE_KERNEL.to(device=movie.device, dtype=movie.dtype)
-    neighbor_average = F.conv2d(
+    neighbor_average = F.conv2d(  # pylint: disable=not-callable
         movie.unsqueeze(1), kernel.view(1, 1, 3, 3), padding=1
     ).squeeze(1)
 

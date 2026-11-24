@@ -107,6 +107,7 @@ class MovieConfig(BaseModelTeamTomo):
             raise ValueError(f"gain_rot must be 0, 1, 2, or 3, got {v}")
         return v
 
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
     def prepare(
         self,
         movie: torch.Tensor,

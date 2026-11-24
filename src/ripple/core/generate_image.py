@@ -147,10 +147,12 @@ def generate_summed_images(
     )
     dft_shape = (out_shape[0], out_shape[1] // 2 + 1)
 
+    # Critical-exposure and normalization grids for dose weighting, if requested.
+    # Only (H, W) shaped, not copied across all frames
+    dose_weighting = None
     dw_dft = None
     if dose_weighted:
-        # Only (H, W) shaped, not copied across all frames
-        Ne, normalization = dose_weight_normalization_grid(
+        dose_weighting = dose_weight_normalization_grid(
             image_shape=out_shape,
             pixel_size=out_pixel_size,
             n_frames=n_frames,
@@ -183,23 +185,23 @@ def generate_summed_images(
                 )
         if non_dw_sum is not None:
             non_dw_sum += torch.sum(chunk, dim=0)
-        if dw_dft is None:
+        if dw_dft is None or dose_weighting is None:
             continue  # plain sum only, no FFT needed
         chunk_dft = torch.fft.rfft2(chunk, dim=(-2, -1))  # pylint: disable=not-callable
         del chunk  # free the real-space chunk before dose weighting
 
-        if dw_dft is not None:
-            chunk_dft = dose_weight_frame_chunk(
-                chunk_dft=chunk_dft,
-                frame_start_idx=start,
-                Ne=Ne,
-                normalization=normalization,
-                pre_exposure=pre_exposure,
-                dose_per_frame=fluence_per_frame,
-                voltage=voltage,
-                in_place=True,
-            )
-            dw_dft += torch.sum(chunk_dft, dim=0)
+        critical_exposure, normalization = dose_weighting
+        chunk_dft = dose_weight_frame_chunk(
+            chunk_dft=chunk_dft,
+            frame_start_idx=start,
+            Ne=critical_exposure,
+            normalization=normalization,
+            pre_exposure=pre_exposure,
+            dose_per_frame=fluence_per_frame,
+            voltage=voltage,
+            in_place=True,
+        )
+        dw_dft += torch.sum(chunk_dft, dim=0)
 
     dw_image = None
     if dw_dft is not None:
@@ -307,7 +309,7 @@ def _dose_weight_movie_to_image_streaming(
     frame_shape = (movie.shape[-2], movie.shape[-1])
     n_frames = movie.shape[0]
 
-    Ne, normalization = dose_weight_normalization_grid(
+    critical_exposure, normalization = dose_weight_normalization_grid(
         image_shape=frame_shape,
         pixel_size=pixel_size,
         n_frames=n_frames,
@@ -330,7 +332,7 @@ def _dose_weight_movie_to_image_streaming(
         chunk_dft = dose_weight_frame_chunk(
             chunk_dft=chunk_dft,
             frame_start_idx=start,
-            Ne=Ne,
+            Ne=critical_exposure,
             normalization=normalization,
             pre_exposure=pre_exposure,
             dose_per_frame=dose_per_frame,

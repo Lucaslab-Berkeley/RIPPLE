@@ -95,6 +95,7 @@ def sum_movie_chunked(
 # ---------------------------------------------------------------------------
 
 
+# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
 def make_ellipse_mask(
     shape: tuple[int, int],
     center_y: float,
@@ -234,6 +235,7 @@ def _initial_center(image: np.ndarray, k: float = 8.0) -> tuple[float, float]:
     return float((yy * weight).sum()) / total, float((xx * weight).sum()) / total
 
 
+# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
 def radial_edge_points(
     image: np.ndarray,
     center: tuple[float, float],
@@ -336,6 +338,7 @@ def _circle_from_3_points(points_xy: np.ndarray) -> tuple[float, float, float] |
     return float(ux), float(uy), float(np.hypot(x1 - ux, y1 - uy))
 
 
+# pylint: disable=too-many-locals
 def robust_ellipse_fit(
     points_xy: np.ndarray,
     tol_frac: float = 0.02,
@@ -403,6 +406,7 @@ def robust_ellipse_fit(
     return ellipse, keep
 
 
+# pylint: disable=too-many-locals
 def fit_beam_edge(
     frame_sum: np.ndarray,
     pixel_size: float,
@@ -467,6 +471,7 @@ def fit_beam_edge(
 # ---------------------------------------------------------------------------
 
 
+# pylint: disable=too-many-arguments,too-many-positional-arguments
 def estimate_beam_mask(
     frame_sum: torch.Tensor,
     pixel_size: float,
@@ -524,6 +529,7 @@ def estimate_beam_mask(
     return params
 
 
+# pylint: disable=too-many-arguments,too-many-positional-arguments
 def estimate_beam_mask_and_mask(
     frame_sum: torch.Tensor,
     pixel_size: float,
