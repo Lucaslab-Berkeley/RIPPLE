@@ -475,3 +475,118 @@ def test_epu_gain_orientation_follows_movie_format(tmp_path, movie_name, flipped
     )
     expected = gain[::-1] if flipped else gain
     assert np.array_equal(cfg.gain.numpy(), expected)
+
+
+# ---------------------------------------------------------------------------
+# Memory: TIFF flip in place, and frame sums without loading the whole movie
+# ---------------------------------------------------------------------------
+
+
+def _peak_traced_bytes(function) -> tuple[int, object]:
+    """Peak bytes allocated (numpy allocations are traced) while `function` runs."""
+    import tracemalloc
+
+    tracemalloc.start()
+    try:
+        result = function()
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    return peak, result
+
+
+def test_tiff_flip_does_not_copy_the_stack(tmp_path):
+    counts = np.random.default_rng(0).integers(0, 9, (30, 128, 96), dtype=np.uint16)
+    path = tmp_path / "movie.tif"
+    imwrite(str(path), counts, photometric="minisblack")
+
+    peak, result = _peak_traced_bytes(lambda: load_array_from_path(path))
+
+    assert np.array_equal(result, counts[:, ::-1])
+    # The stack plus about one image, not two stacks
+    assert peak < 1.25 * counts.nbytes
+
+
+@pytest.mark.parametrize("chunk_size", [1, 3, 8, 100])
+@pytest.mark.parametrize("name", ["movie.tif", "movie.TIFF", "movie.mrc", "movie.mrcs"])
+def test_sum_movie_frames_matches_loaded_movie(tmp_path, chunk_size, name):
+    counts = np.random.default_rng(1).integers(0, 9, (11, 24, 20), dtype=np.uint16)
+    path = tmp_path / name
+    if name.lower().endswith((".tif", ".tiff")):
+        imwrite(str(path), counts, photometric="minisblack")
+    else:
+        with mrcfile.new(str(path), overwrite=True) as mrc:
+            mrc.set_data(counts)
+    cfg = MovieConfig(**_base_movie_config_kwargs(movie_path=str(path)))
+
+    frame_sum = cfg.frame_sum(chunk_size=chunk_size)
+
+    assert frame_sum.dtype == torch.float32
+    assert torch.equal(frame_sum, cfg.movie.to(torch.float32).sum(dim=0))
+
+
+def test_sum_movie_frames_holds_one_chunk_of_tiff_frames(tmp_path):
+    counts = np.random.default_rng(2).integers(0, 9, (40, 128, 96), dtype=np.uint16)
+    path = tmp_path / "movie.tif"
+    imwrite(str(path), counts, photometric="minisblack")
+
+    peak, frame_sum = _peak_traced_bytes(
+        lambda: data_io.sum_movie_frames(path, chunk_size=4)
+    )
+
+    assert torch.equal(frame_sum, torch.from_numpy(counts[:, ::-1].sum(0)).float())
+    # 4 frames read at a time plus float32 sums: well under the whole stack
+    assert peak < 0.4 * counts.nbytes
+
+
+class _FakeEerFile:
+    """Stands in for tifffile.TiffFile on an EER file: one decoded page per frame."""
+
+    def __init__(self, frames: np.ndarray):
+        self.frames = frames
+        self.pages = list(range(len(frames)))
+        self.keys: list[range] = []
+
+    def __call__(self, path):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def asarray(self, key):
+        self.keys.append(key)
+        return self.frames[list(key)]
+
+
+@pytest.mark.parametrize(
+    ("fluence", "fluence_per_frame", "n_summed"),
+    [
+        (30.0, 3.0, 30),  # 3 EER frames per output frame: 10 whole frames, 1 left over
+        (31.0, 3.0, 30),  # rounding as eerfile.render does
+        (0.0, 0.0, 31),  # beam-mask-only config: every EER frame
+    ],
+)
+def test_eer_frame_sum_counts_the_rendered_frames(
+    monkeypatch, fluence, fluence_per_frame, n_summed
+):
+    frames = np.random.default_rng(3).random((31, 8, 6)) < 0.3  # decoded EER frames
+    fake = _FakeEerFile(frames)
+    monkeypatch.setattr(data_io, "TiffFile", fake)
+    cfg = MovieConfig(
+        **_base_movie_config_kwargs(
+            movie_path="movie.eer",
+            fluence=fluence,
+            fluence_per_frame=fluence_per_frame,
+        )
+    )
+
+    frame_sum = cfg.frame_sum()
+
+    expected = frames[:n_summed].sum(axis=0).astype(np.float32)
+    assert np.array_equal(frame_sum.numpy(), expected)  # EER rows are not flipped
+    assert (
+        max(len(key) for key in fake.keys) <= data_io.DEFAULT_EER_FRAME_SUM_CHUNK_SIZE
+    )

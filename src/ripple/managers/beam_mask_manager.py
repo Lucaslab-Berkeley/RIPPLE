@@ -32,10 +32,13 @@ class BeamMaskManager(BaseModelTeamTomo):
         Parameters
         ----------
         movie : torch.Tensor | None
-            Raw movie tensor. If provided, it is used as-is. If None, loaded from
-            ``movie_config`` (``movie_config.fluence``/``fluence_per_frame`` are not
-            read by this manager and may be left at any value, e.g. 0.0, if the movie is
-            only being used for beam mask estimation).
+            Raw movie tensor. If provided, its frames are summed on the compute
+            device. If None, the frames are summed from ``movie_config.movie_path``
+            a few at a time on the CPU (see
+            :meth:`~ripple.config.MovieConfig.frame_sum`), without loading the whole
+            movie or using a GPU. ``movie_config.fluence``/``fluence_per_frame`` may
+            be left at 0.0 if the movie is only used for beam mask estimation; for
+            EER all frames are then summed.
 
         Returns
         -------
@@ -57,7 +60,8 @@ class BeamMaskManager(BaseModelTeamTomo):
         Parameters
         ----------
         movie : torch.Tensor | None
-            Raw movie tensor. If None, loaded from ``movie_config``.
+            Raw movie tensor. If None, the frames are summed from
+            ``movie_config.movie_path`` (see :meth:`estimate`).
 
         Returns
         -------
@@ -66,10 +70,10 @@ class BeamMaskManager(BaseModelTeamTomo):
             ``(height, width)`` mask (equal to ``result.to_mask()``).
         """
         if movie is None:
-            movie = self.movie_config.movie
-
-        device = self.computational_config.gpu_device
-        frame_sum = sum_movie_chunked(movie, device=device)
+            frame_sum = self.movie_config.frame_sum()
+        else:
+            device = self.computational_config.gpu_device
+            frame_sum = sum_movie_chunked(movie, device=device)
 
         result_dict, ellipse_mask = estimate_beam_mask_and_mask(
             frame_sum,

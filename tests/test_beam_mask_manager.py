@@ -263,3 +263,28 @@ class TestSharedTensorComposition:
         )
         assert prepared.shape == (N_FRAMES, expected_h, expected_w)
         assert (expected_h, expected_w) != (HEIGHT, WIDTH)
+
+
+class TestEstimateFromDisk:
+    """Without a movie tensor, the frames are summed from disk a few at a time."""
+
+    @pytest.mark.parametrize("file_format", ["mrc", "tif"])
+    def test_same_result_as_from_the_loaded_movie(
+        self, tmp_path, manager, movie_array, file_format, monkeypatch
+    ):
+        if file_format == "tif":
+            from tifffile import imwrite
+
+            path = tmp_path / "movie.tif"
+            imwrite(str(path), movie_array, photometric="minisblack")
+            manager.movie_config.movie_path = str(path)
+        from_loaded_movie = manager.estimate(movie=manager.movie_config.movie)
+
+        # The whole movie must not be loaded
+        def _no_movie(_self):
+            raise AssertionError("estimate() loaded the whole movie")
+
+        monkeypatch.setattr(type(manager.movie_config), "movie", property(_no_movie))
+        from_disk = manager.estimate()
+
+        assert from_disk.model_dump() == pytest.approx(from_loaded_movie.model_dump())

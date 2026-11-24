@@ -28,6 +28,12 @@ DM4_EXTENSIONS = (".dm4",)
 # File extensions (lower case) accepted as movies, including EER
 MOVIE_EXTENSIONS = (".eer", ".mrc", ".mrcs", ".tif", ".tiff")
 
+# Frames read at a time when only the sum of a movie's frames is needed. For TIFF
+# this keeps tifffile's parallel decoding; for EER it is the number of EER frames
+# (about 16 MB each at 4K once decoded).
+DEFAULT_FRAME_SUM_CHUNK_SIZE = 8
+DEFAULT_EER_FRAME_SUM_CHUNK_SIZE = 128
+
 
 def render_eer_to_tensor(
     eer_path: str | os.PathLike | Path,
@@ -63,6 +69,107 @@ def render_eer_to_tensor(
     return _array_to_tensor(movie_data)
 
 
+def sum_movie_frames(
+    movie_path: str | os.PathLike | Path,
+    chunk_size: int = DEFAULT_FRAME_SUM_CHUNK_SIZE,
+    fluence_per_frame: float | None = None,
+    total_fluence: float | None = None,
+) -> torch.Tensor:
+    """Sum a movie's frames, reading a few frames at a time.
+
+    Gives the sum over frames of the movie as :class:`~ripple.config.MovieConfig`
+    loads it (same orientation, so TIFF rows are flipped) without holding the whole
+    movie in memory: peak memory is about one chunk of frames plus the sum.
+
+    Parameters
+    ----------
+    movie_path : str | os.PathLike | Path
+        Path to an EER, MRC/MRCS or TIFF movie.
+    chunk_size : int
+        Number of frames read at a time (MRC and TIFF). Default 8.
+    fluence_per_frame : float | None
+        EER only. With `total_fluence`, only the EER frames that rendering groups
+        into whole output frames are summed, as :func:`render_eer_to_tensor` drops
+        a final partial group. If either is None or 0, all EER frames are summed.
+    total_fluence : float | None
+        EER only; see `fluence_per_frame`.
+
+    Returns
+    -------
+    torch.Tensor
+        float32 ``(height, width)`` sum, on the CPU.
+    """
+    path_lower = str(movie_path).lower()
+    if path_lower.endswith(".eer"):
+        frame_sum = _sum_eer_frames(movie_path, fluence_per_frame, total_fluence)
+    elif path_lower.endswith(MRC_EXTENSIONS):
+        frame_sum = _sum_mrc_frames(movie_path, chunk_size)
+    elif path_lower.endswith((".tif", ".tiff")):
+        frame_sum = _sum_tiff_frames(movie_path, chunk_size)
+    else:
+        movie = load_array_from_path(movie_path, expected_ndim=3)
+        frame_sum = movie.sum(axis=0, dtype=np.float32)
+    return torch.from_numpy(frame_sum)
+
+
+def _sum_tiff_frames(tif_path: str | os.PathLike | Path, chunk_size: int) -> np.ndarray:
+    """Sum a TIFF movie's frames, decoding `chunk_size` pages at a time."""
+    with TiffFile(tif_path) as tiff:
+        n_pages = len(tiff.series[0].pages)
+        frame_sum = None
+        for start in range(0, n_pages, chunk_size):
+            pages = range(start, min(start + chunk_size, n_pages))
+            chunk = tiff.asarray(key=pages, series=0)
+            chunk_sum = chunk.reshape(-1, *chunk.shape[-2:]).sum(
+                axis=0, dtype=np.float32
+            )
+            frame_sum = chunk_sum if frame_sum is None else frame_sum + chunk_sum
+    assert frame_sum is not None
+    # Same orientation as the loaded movie (see _load_tiff_array)
+    return np.ascontiguousarray(frame_sum[::-1])
+
+
+def _sum_mrc_frames(mrc_path: str | os.PathLike | Path, chunk_size: int) -> np.ndarray:
+    """Sum an MRC movie's frames, reading `chunk_size` frames at a time."""
+    with mrcfile.mmap(mrc_path, mode="r") as mrc:
+        frames = mrc.data.reshape(-1, *mrc.data.shape[-2:])
+        frame_sum = np.zeros(frames.shape[-2:], dtype=np.float32)
+        for start in range(0, frames.shape[0], chunk_size):
+            frame_sum += frames[start : start + chunk_size].sum(
+                axis=0, dtype=np.float32
+            )
+    return frame_sum
+
+
+def _sum_eer_frames(
+    eer_path: str | os.PathLike | Path,
+    fluence_per_frame: float | None,
+    total_fluence: float | None,
+    chunk_size: int = DEFAULT_EER_FRAME_SUM_CHUNK_SIZE,
+) -> np.ndarray:
+    """Sum an EER movie's electron counts, decoding `chunk_size` EER frames at a time.
+
+    EER frames are not flipped on read (see :meth:`ripple.config.MovieConfig.gain`).
+    """
+    with TiffFile(eer_path) as tiff:
+        n_eer_frames = len(tiff.pages)
+        n_summed = n_eer_frames
+        if fluence_per_frame and total_fluence:
+            # As eerfile.render: whole groups of EER frames make output frames
+            dose_per_eer_frame = total_fluence / n_eer_frames
+            per_output_frame = max(1, round(fluence_per_frame / dose_per_eer_frame))
+            n_summed = (n_eer_frames // per_output_frame) * per_output_frame
+        frame_sum = None
+        for start in range(0, n_summed, chunk_size):
+            chunk = tiff.asarray(key=range(start, min(start + chunk_size, n_summed)))
+            chunk_sum = chunk.reshape(-1, *chunk.shape[-2:]).sum(
+                axis=0, dtype=np.float32
+            )
+            frame_sum = chunk_sum if frame_sum is None else frame_sum + chunk_sum
+    assert frame_sum is not None
+    return frame_sum
+
+
 def _array_to_tensor(array: np.ndarray) -> torch.Tensor:
     """Wrap `array` as a tensor of the same dtype, without copying where possible.
 
@@ -86,7 +193,10 @@ def _load_tiff_array(tif_path: str | os.PathLike | Path) -> np.ndarray:
     """
     with TiffFile(tif_path) as tiff:
         array = tiff.asarray()
-    return np.ascontiguousarray(array[..., ::-1, :])
+    # Flip one image at a time, in place, so the stack is never copied
+    for image in array.reshape(-1, *array.shape[-2:]):
+        image[:] = image[::-1].copy()
+    return array
 
 
 def _load_mrc_array(mrc_path: str | os.PathLike | Path) -> np.ndarray:

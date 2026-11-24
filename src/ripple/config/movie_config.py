@@ -9,8 +9,10 @@ from ripple.core.crop_bounds import CropBounds
 from ripple.core.prepare_movie import DEFAULT_PREP_CHUNK_SIZE, prepare_movie
 from ripple.utils.data_io import (
     DEFAULT_EER_RENDER_CHUNK_SIZE,
+    DEFAULT_FRAME_SUM_CHUNK_SIZE,
     load_tensor_from_path,
     render_eer_to_tensor,
+    sum_movie_frames,
 )
 
 
@@ -212,6 +214,34 @@ class MovieConfig(BaseModelTeamTomo):
                 chunk_size=self.eer_render_chunk_size,
             )
         return load_tensor_from_path(self.movie_path, expected_ndim=3, dtype=None)
+
+    def frame_sum(self, chunk_size: int = DEFAULT_FRAME_SUM_CHUNK_SIZE) -> torch.Tensor:
+        """Sum the movie's frames from disk, a few frames at a time.
+
+        The same as summing :attr:`movie` over frames (float32, same orientation),
+        without loading the whole movie; see
+        :func:`~ripple.utils.data_io.sum_movie_frames`. For EER, if `fluence` and
+        `fluence_per_frame` are both set, the EER frames that rendering would drop
+        are left out, as in :attr:`movie`; if either is 0, all are summed.
+
+        Parameters
+        ----------
+        chunk_size : int
+            Number of frames read at a time (MRC and TIFF). Default 8.
+
+        Returns
+        -------
+        torch.Tensor
+            float32 ``(height, width)`` sum, on the CPU.
+        """
+        if not self.movie_path:
+            raise ValueError("Movie path is not set.")
+        return sum_movie_frames(
+            self.movie_path,
+            chunk_size=chunk_size,
+            fluence_per_frame=self.fluence_per_frame,
+            total_fluence=self.fluence,
+        )
 
     @staticmethod
     def _load_2d(path: str | None) -> torch.Tensor | None:

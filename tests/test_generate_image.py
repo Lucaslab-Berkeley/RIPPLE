@@ -395,3 +395,29 @@ def test_fourier_crop_shape_matches_fourier_crop_movie(frame_shape, factor):
 
     assert out_shape == tuple(cropped.shape[-2:])
     assert out_pixel_size == expected_pixel_size
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a GPU")
+def test_generate_summed_images_gpu_memory_is_bounded_by_the_chunk():
+    """Super-resolution sums keep a few chunks of frames on the GPU, not the stack."""
+    device = torch.device("cuda")
+    n_frames, height, width, chunk_size = 32, 1024, 1536, 2
+    movie = torch.rand(n_frames, height, width, device=device)
+    torch.cuda.synchronize()
+    torch.cuda.reset_peak_memory_stats()
+    before = torch.cuda.memory_allocated()
+
+    generate_summed_images(
+        movie,
+        0.5,
+        super_resolution_factor=2,
+        device=device,
+        chunk_size=chunk_size,
+        **DW_PARAMS,
+    )
+    torch.cuda.synchronize()
+
+    extra = torch.cuda.max_memory_allocated() - before
+    chunk_bytes = chunk_size * height * width * 4
+    # Whole-stack cropping needed several copies of the 32-frame stack (16 chunks each)
+    assert extra < 8 * chunk_bytes
