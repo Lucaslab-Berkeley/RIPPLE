@@ -47,7 +47,8 @@ def prepare_movie(
         The dark map to apply to the movie. If None, the dark map will be
         initialized to zero.
     gain_flip: int
-        Flip applied to gain and dark reference maps (0 = none, 1 = flipY, 2 = flipX).
+        Flip applied to gain and dark reference maps after any rotation (0 = none,
+        1 = flipY, 2 = flipX).
     gain_rot: int
         Rotation applied to gain and dark reference maps (0-3, CCW quarter turns).
     multiply_gain: bool = True
@@ -132,14 +133,20 @@ def transform_reference_map(
     gain_flip: int,
     gain_rot: int,
 ) -> torch.Tensor:
-    """Flip and rotate a gain or dark reference so it aligns with the movie grid.
+    """Rotate and then flip a gain or dark reference to align it with the movie grid.
+
+    The same transform as MotionCor2's ``-RotGain``/``-FlipGain`` and RELION's
+    ``--gain_rot``/``--gain_flip``: rotate first, then flip. Row 0 is y = 0, so a
+    counter-clockwise rotation with y up (as displayed in IMOD) is ``rot90`` with
+    negative ``k``; ``gain_rot=1`` takes the input pixel at row ``h - 1 - x'``,
+    column ``y'`` to row ``y'``, column ``x'``.
 
     Parameters
     ----------
     reference_map : torch.Tensor
         2-D reference map with shape ``(height, width)`` (gain or dark).
     gain_flip : int
-        Flip to apply: 0 = none, 1 = flipY, 2 = flipX.
+        Flip to apply after the rotation: 0 = none, 1 = flipY, 2 = flipX.
     gain_rot : int
         Rotation to apply: 0 = none, 1 = 90°, 2 = 180°, 3 = 270° (CCW).
 
@@ -148,13 +155,13 @@ def transform_reference_map(
     torch.Tensor
         Transformed reference map, same dtype/device as the input.
     """
+    if gain_rot != 0:
+        reference_map = torch.rot90(reference_map, k=-gain_rot)
+
     if gain_flip == 1:
         reference_map = reference_map.flip(0)  # flipY
     elif gain_flip == 2:
         reference_map = reference_map.flip(1)  # flipX
-
-    if gain_rot != 0:
-        reference_map = torch.rot90(reference_map, k=-gain_rot)
 
     return reference_map
 
@@ -176,12 +183,13 @@ def apply_gain(
     gain_map : torch.Tensor | None
         The gain map to apply to the movie. If None, returns the movie unchanged.
     gain_flip : int
-        The flip to apply to the gain map.
+        The flip to apply to the gain map, after any rotation (see
+        :func:`transform_reference_map`).
         0: no flip
         1: flipY
         2: flipX
     gain_rot : int
-        The rotation to apply to the gain map.
+        The counter-clockwise rotation to apply to the gain map.
         0: no rotation
         1: 90 degrees
         2: 180 degrees

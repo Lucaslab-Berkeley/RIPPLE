@@ -77,8 +77,16 @@ def _array_to_tensor(array: np.ndarray) -> torch.Tensor:
 
 
 def _load_tiff_array(tif_path: str | os.PathLike | Path) -> np.ndarray:
+    """Read a TIFF file with its Y axis flipped, as IMOD, MotionCor2 and RELION do.
+
+    TIFF stores the top row first and MRC the bottom row; those programs flip TIFF
+    rows on read so both formats share one orientation. Doing the same means gain
+    flip/rotation settings carry over from them, and sums of TIFF movies have the
+    same orientation as theirs.
+    """
     with TiffFile(tif_path) as tiff:
-        return tiff.asarray()
+        array = tiff.asarray()
+    return np.ascontiguousarray(array[..., ::-1, :])
 
 
 def _load_mrc_array(mrc_path: str | os.PathLike | Path) -> np.ndarray:
@@ -188,7 +196,9 @@ def load_array_from_path(
     ----------
     file_path : str | os.PathLike | Path
         Path to the file. Supported extensions (case-insensitive): ``.mrc``,
-        ``.mrcs``, ``.tif``, ``.tiff``, ``.gain``, ``.dark``, ``.dm4``.
+        ``.mrcs``, ``.tif``, ``.tiff``, ``.gain``, ``.dark``, ``.dm4``. TIFF files
+        (including ``.gain`` and ``.dark``) are read with the Y axis flipped, as
+        IMOD, MotionCor2 and RELION read them.
     expected_ndim : int | None
         Expected number of dimensions after optional squeezing. Default None
         skips shape validation.

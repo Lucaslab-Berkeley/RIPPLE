@@ -53,18 +53,21 @@ def mrc_movie(tmp_path, movie_data):
 
 @pytest.fixture
 def tif_image(tmp_path, image_data):
-    """Write a 2-D TIFF file; yield path and the original array."""
+    """Write a 2-D TIFF file; yield path and the array as RIPPLE reads it.
+
+    TIFF files are read with the Y axis flipped, as IMOD, MotionCor2 and RELION do.
+    """
     path = tmp_path / "image.tif"
     imwrite(str(path), image_data)
-    return path, image_data
+    return path, np.ascontiguousarray(image_data[::-1])
 
 
 @pytest.fixture
 def tif_movie(tmp_path, movie_data):
-    """Write a 3-D TIFF file; yield path and the original array."""
+    """Write a 3-D TIFF file; yield path and the array as read (Y flipped)."""
     path = tmp_path / "movie.tif"
     imwrite(str(path), movie_data, photometric="minisblack")
-    return path, movie_data
+    return path, np.ascontiguousarray(movie_data[:, ::-1])
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +337,7 @@ def test_load_tensor_from_path_tiff_extensions(tmp_path, movie_data, name):
     path = tmp_path / name
     imwrite(str(path), movie_data, photometric="minisblack")
     result = load_tensor_from_path(path, expected_ndim=3)
-    assert torch.allclose(result, torch.tensor(movie_data))
+    assert torch.allclose(result, torch.tensor(movie_data[:, ::-1].copy()))
 
 
 @pytest.mark.parametrize("name", ["movie.mrcs", "movie.TIFF"])
@@ -345,6 +348,7 @@ def test_movie_config_movie_accepts_extension(tmp_path, movie_data, name):
             mrc.set_data(movie_data)
     else:
         imwrite(str(path), movie_data, photometric="minisblack")
+        movie_data = movie_data[:, ::-1].copy()  # TIFF is read with Y flipped
     cfg = MovieConfig(**_base_movie_config_kwargs(movie_path=str(path)))
     assert torch.allclose(cfg.movie, torch.tensor(movie_data))
 
@@ -363,7 +367,7 @@ def test_movie_config_movie_keeps_native_tiff_dtype(tmp_path):
     result = cfg.movie
 
     assert result.dtype == torch.uint8
-    assert np.array_equal(result.numpy(), counts)
+    assert np.array_equal(result.numpy(), counts[:, ::-1])
 
 
 @pytest.mark.parametrize("dtype", [np.int8, np.int16, np.uint16])
@@ -391,8 +395,9 @@ def test_gain_stays_float32_for_integer_file(tmp_path):
 
 
 def test_load_tensor_from_path_dtype_none_shares_memory(tmp_path, movie_data):
-    path = tmp_path / "movie.tif"
-    imwrite(str(path), movie_data, photometric="minisblack")
+    path = tmp_path / "movie.mrc"
+    with mrcfile.new(str(path), overwrite=True) as mrc:
+        mrc.set_data(movie_data)
     result = load_tensor_from_path(path, expected_ndim=3, dtype=None)
     assert result.dtype == torch.float32
     assert torch.allclose(result, torch.tensor(movie_data))
@@ -439,3 +444,34 @@ def test_movie_config_eer_passes_chunk_size_and_keeps_uint16(monkeypatch):
 def test_movie_config_eer_chunk_size_default():
     cfg = MovieConfig(**_base_movie_config_kwargs())
     assert cfg.eer_render_chunk_size == data_io.DEFAULT_EER_RENDER_CHUNK_SIZE
+
+
+# ---------------------------------------------------------------------------
+# Orientation conventions (as IMOD, MotionCor2 and RELION)
+# ---------------------------------------------------------------------------
+
+
+def test_tiff_is_read_with_y_flipped(tmp_path):
+    rows = np.arange(4 * 3, dtype=np.uint16).reshape(4, 3)  # row 0 first in file
+    path = tmp_path / "image.tif"
+    imwrite(str(path), rows)
+    result = load_array_from_path(path, expected_ndim=2)
+    assert np.array_equal(result, rows[::-1])
+
+
+@pytest.mark.parametrize(
+    ("movie_name", "flipped"),
+    [("movie.eer", False), ("movie.EER", False), ("movie.tif", True)],
+)
+def test_epu_gain_orientation_follows_movie_format(tmp_path, movie_name, flipped):
+    """As in RELION: an EPU .gain matches unflipped EER frames, flipped TIFF frames."""
+    gain = np.arange(1, 4 * 3 + 1, dtype=np.float32).reshape(4, 3)
+    gain_path = tmp_path / "ref.gain"
+    imwrite(str(gain_path), gain)
+    cfg = MovieConfig(
+        **_base_movie_config_kwargs(
+            movie_path=str(tmp_path / movie_name), gain_path=str(gain_path)
+        )
+    )
+    expected = gain[::-1] if flipped else gain
+    assert np.array_equal(cfg.gain.numpy(), expected)

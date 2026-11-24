@@ -51,16 +51,20 @@ class MovieConfig(BaseModelTeamTomo):
     crop_bounds_config: CropBoundsConfig
         Auto-cropping config when a mask is provided.
     gain_flip: int
-        Flip the gain map.
+        Flip the gain (and dark) map, after any rotation.
         0: no flip
-        1: flipY
-        2: flipX
+        1: flipY (upside down)
+        2: flipX (left to right)
     gain_rot: int
-        Rotate the gain map.
+        Rotate the gain (and dark) map counter-clockwise (with y up, as in IMOD).
         0: no rotation
         1: 90 degrees
         2: 180 degrees
         3: 270 degrees
+        `gain_rot` and `gain_flip` mean the same as MotionCor2's ``-RotGain`` and
+        ``-FlipGain`` and RELION's ``--gain_rot`` and ``--gain_flip``: TIFF movies
+        and gains are read with the Y axis flipped as those programs do, and the
+        gain is rotated before it is flipped.
     multiply_gain: bool
         Whether to multiply the movie by the gain map or divide the movie by the
         gain map. Default is True.
@@ -217,8 +221,23 @@ class MovieConfig(BaseModelTeamTomo):
 
     @property
     def gain(self) -> torch.Tensor | None:
-        """Get the gain tensor."""
-        return self._load_2d(self.gain_path)
+        """Get the gain tensor, in the same orientation as the movie.
+
+        TIFF files, ``.gain`` included, are read with the Y axis flipped (see
+        :func:`~ripple.utils.data_io.load_array_from_path`), but EER frames are
+        not. As in RELION, an EPU ``.gain`` for an EER movie is flipped back, so it
+        matches the frames without any ``gain_flip``.
+        """
+        gain = self._load_2d(self.gain_path)
+        if (
+            gain is not None
+            and self.gain_path is not None
+            and self.gain_path.lower().endswith(".gain")
+            and self.movie_path is not None
+            and self.movie_path.lower().endswith(".eer")
+        ):
+            gain = gain.flip(0)
+        return gain
 
     @property
     def mask(self) -> torch.Tensor | None:

@@ -110,15 +110,30 @@ def test_apply_gain_rotation_270(sample_movie, sample_gain_map):
     assert torch.allclose(result, expected)
 
 
-def test_apply_gain_flip_and_rotation(sample_movie, sample_gain_map):
-    """Test apply_gain with both flip and rotation."""
+@pytest.mark.parametrize("gain_flip", [1, 2])
+@pytest.mark.parametrize("gain_rot", [1, 3])
+def test_apply_gain_rotates_then_flips(sample_movie, gain_flip, gain_rot):
+    """Rotate first, then flip, as MotionCor2 -RotGain/-FlipGain and RELION do."""
+    gain = 1 + torch.rand(32, 32, generator=torch.Generator().manual_seed(0))
     result = apply_gain(
-        sample_movie, sample_gain_map, gain_flip=1, gain_rot=1, multiply_gain=True
+        sample_movie, gain, gain_flip=gain_flip, gain_rot=gain_rot, multiply_gain=True
     )
-    # Should flip first, then rotate
-    transformed_gain = torch.rot90(sample_gain_map.flip(0), k=-1)
-    expected = sample_movie * transformed_gain
-    assert torch.allclose(result, expected)
+    transformed_gain = torch.rot90(gain, k=-gain_rot).flip(gain_flip - 1)
+    assert torch.allclose(result, sample_movie * transformed_gain)
+    # The other order gives a different gain for a quarter turn plus a flip
+    other_order = torch.rot90(gain.flip(gain_flip - 1), k=-gain_rot)
+    assert not torch.allclose(transformed_gain, other_order)
+
+
+def test_transform_reference_map_quarter_turn_matches_motioncor():
+    """MotionCor's RotGain 1: output (x', y') is input (x = y', y = ny - 1 - x')."""
+    ny, nx = 3, 5
+    gain = torch.arange(ny * nx, dtype=torch.float32).reshape(ny, nx)  # [y, x]
+    rotated = transform_reference_map(gain, gain_flip=0, gain_rot=1)
+    assert rotated.shape == (nx, ny)
+    for y_out in range(nx):
+        for x_out in range(ny):
+            assert rotated[y_out, x_out] == gain[ny - 1 - x_out, y_out]
 
 
 # Tests for apply_dark
