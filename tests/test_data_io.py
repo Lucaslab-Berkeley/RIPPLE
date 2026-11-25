@@ -526,7 +526,9 @@ def test_sum_movie_frames_matches_loaded_movie(tmp_path, chunk_size, name):
 
 
 def test_sum_movie_frames_holds_one_chunk_of_tiff_frames(tmp_path):
-    counts = np.random.default_rng(2).integers(0, 9, (40, 128, 96), dtype=np.uint16)
+    # Enough frames that one chunk of 4 plus the float32 sums (about 0.2 of the
+    # stack) sit well under the limit, whatever tifffile's per-page overhead
+    counts = np.random.default_rng(2).integers(0, 9, (64, 256, 192), dtype=np.uint16)
     path = tmp_path / "movie.tif"
     imwrite(str(path), counts, photometric="minisblack")
 
