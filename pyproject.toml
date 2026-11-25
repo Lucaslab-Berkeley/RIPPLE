@@ -62,8 +62,8 @@ dependencies = [
 
 # https://peps.python.org/pep-0621/#dependencies-optional-dependencies
 # add dependencies for "extra" features here.  Not dev dependencies.
-# [project.optional-dependencies]
-# name = ["dependency"]
+[project.optional-dependencies]
+plot = ["matplotlib"]  # estimate_frame_weights' B-factor plot
 
 [project.urls]
 homepage = "https://github.com/Lucaslab-Berkeley/RIPPLE"
