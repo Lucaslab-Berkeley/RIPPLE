@@ -1,0 +1,78 @@
+################################################
+### Per-frame B-factor estimation config     ###
+################################################
+# Fits every frame's B-factor and scale (RELION's model w_f(k) = exp(B_f k^2/4 + C_f))
+# and a 5-knot correction to the matched template envelope, from particles found on
+# the sums of RIPPLE-aligned movies.
+#
+#   python run_estimate_frame_weights.py estimate_frame_weights_example_config.yaml
+#
+# Then re-sum with the table (programs/align_movie/run_resum.py, dose_weighting:
+# <output_dir>/frame_weights.json) and rebuild the template with
+# <output_dir>/template_envelope.json (ttsim3d matched dose filter or ttsim3d-refilter).
+
+computational_config:
+  gpu_id: 0
+  keep_movie_on_cpu: true   # stream frames to the GPU (needed for super-resolution movies)
+
+# --- The movies' preparation, as in their alignment run (copy that run's movie_config;
+#     movie_path is set per movie) ---
+movie_config:
+  pixel_size: 0.936
+  super_resolution_factor: 1
+  fluence: 54.5
+  fluence_per_frame: 1.0
+  pre_exposure: 0.0
+  voltage: 300.0
+  gain_path: null
+  dark_path: null
+  gain_flip: 0
+  gain_rot: 0
+  multiply_gain: true
+grid_type: catmull_rom            # the alignment's grid_type (CSV fields do not record it)
+skip_movie_preparation: false     # the alignment's skip_movie_preparation
+
+# --- Movies: raw movie + saved deformation field (no re-alignment), or an aligned stack ---
+movies:
+  - movie_path: ../../example/movies/my_movie.eer
+    deformation_field_path: ../../example/output/my_movie_def_field.csv
+    micrograph_path: null          # particles' micrograph_path for this movie; null: file names starting with the movie stem
+  # - aligned_movie_path: ../../example/output/my_movie_corrected.mrc
+
+# --- Particles and template ---
+particles_path: ../../example/output/panther_export_particles.csv   # Leopard-EM particle stack CSV
+template_path: ../../example/templates/60S_bscale0.5.mrc            # the template the particles were found with
+template_envelope:                 # the envelope that template already carries
+  kind: ttsim3d                    # none (no dose filter) | ttsim3d (G&G cumulative filter) | file (a TemplateEnvelope JSON)
+  dose_start: 0.0
+  dose_end: 50.0
+  modify_signal: rel_diff          # None | sqrt | rel_diff
+  path: null                       # for kind: file
+particle_overrides: {}             # set particle CSV columns, e.g. {spherical_aberration: 2.7, amplitude_contrast_ratio: 0.07}
+selection:
+  score_column: null               # e.g. refined_scaled_mip; null keeps every particle (an export is already cut at its false-positive threshold)
+  min_score: null
+  max_particles: null
+
+# --- The fit ---
+estimation:
+  n_bins: 48                       # radial bins, uniform in sqrt(|k|)
+  position_window: 3               # +- pixels; each half of the frames picks the position for the other half
+  reference_weights: gg            # gg | default: weights that pick the position and define the null sd
+  null_model: analytic             # analytic | random (n_random orientations per particle; slow, for checks)
+  min_snr: 5.0                     # bins fitted: a contiguous run whose summed signal is >= this many SE
+  min_resolution: 40.0             # lowest resolution fitted (A)
+  reference_frame: null            # gauge frame held at B = C = 0 during the fit (default: most signal)
+  n_bootstrap: 200
+  bootstrap_group: null            # resample particles (null) or groups, e.g. micrograph_path
+  prior: null                      # optional shrinkage of every frame towards "default" or a table path (off by default)
+  prior_sd_bfactor: null           # A^2
+  prior_sd_log_scale: null
+  fit_envelope_correction: true
+  envelope_knots: 5
+  envelope_knot_resolutions: [50.0, 2.9]
+
+output:
+  output_dir: ../../example/output/frame_weights
+  allow_file_overwrite: false
+  save_pieces: false               # also save the per-particle correlation pieces (large)

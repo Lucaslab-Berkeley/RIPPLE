@@ -8,6 +8,7 @@ import torch
 from torch_motion_correction import DeformationField
 
 from ripple.core.crop_bounds import CropBounds
+from ripple.core.dose_weighting import movie_frame_weight_table
 from ripple.core.generate_image import (
     DEFAULT_DOSE_WEIGHT_CHUNK_SIZE,
     generate_summed_images,
@@ -187,7 +188,7 @@ def prepare_movie_if_needed(
     )
 
 
-# pylint: disable=too-many-arguments,too-many-positional-arguments
+# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
 def save_results(
     output_config: "OutputConfig",
     movie_config: "MovieConfig",
@@ -203,7 +204,8 @@ def save_results(
     Every configured output is checked (see
     :meth:`~ripple.config.OutputConfig.check_output_paths`) before anything is
     written, so with ``allow_file_overwrite`` False no file is overwritten and no
-    output is written if any already exists.
+    output is written if any already exists. The dose-weighted sum uses
+    ``output_config.dose_weighting`` (G&G by default).
 
     Parameters
     ----------
@@ -241,6 +243,15 @@ def save_results(
     needs_non_dw = output_config.non_dw_sum_output_path is not None
     if needs_dw or needs_non_dw:
         factor = movie_config.super_resolution_factor
+        frame_weights = None
+        if needs_dw:
+            frame_weights = movie_frame_weight_table(
+                output_config.dose_weighting,
+                n_frames=corrected_movie.shape[0],
+                pre_exposure=movie_config.pre_exposure,
+                fluence_per_frame=movie_config.fluence_per_frame,
+                voltage=movie_config.voltage,
+            )
         dw_movie, summed_movie, summation_pixel_size = generate_summed_images(
             corrected_movie,
             movie_config.pixel_size,
@@ -252,6 +263,7 @@ def save_results(
             non_dose_weighted=needs_non_dw,
             device=device,
             chunk_size=max(1, DEFAULT_DOSE_WEIGHT_CHUNK_SIZE // factor**2),
+            frame_weights=frame_weights,
         )
 
     # Save DW sum is wanted

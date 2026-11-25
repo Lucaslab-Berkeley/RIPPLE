@@ -3,8 +3,10 @@
 import os
 from typing import Self
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from teamtomo_basemodel import BaseModelTeamTomo
+
+from ripple.core.dose_weighting import validate_dose_weighting
 
 
 def check_file_path_and_permissions(path: str | None, allow_overwrite: bool) -> None:
@@ -42,6 +44,23 @@ class OutputConfig(BaseModelTeamTomo):
     per-movie paths set by the directory scripts) are not; call
     :meth:`check_output_paths` before starting work that writes them. The managers do
     this at the start of a run and again before writing any output.
+
+    Attributes
+    ----------
+    dose_weighting : str
+        How the dose-weighted sum weights its frames:
+
+        - ``"gg"`` (default): Grant & Grigorieff (2015) critical-exposure weights,
+          as RIPPLE has always used.
+        - ``"default"``: per-frame B-factor weights ``exp(B_f k^2 / 4 + C_f)`` from
+          the default curve in cumulative exposure
+          (``torch_fourier_filter.frame_weights.default_frame_bfactors``).
+        - a path to a frame weight table (``.json``), such as the one RIPPLE's
+          ``estimate_frame_weights`` program writes. It is resampled onto the
+          movie's frames by exposure.
+
+        Every option normalises the weights at each frequency by
+        ``sqrt(sum_f w_f^2)``.
     """
 
     allow_file_overwrite: bool = True
@@ -51,6 +70,13 @@ class OutputConfig(BaseModelTeamTomo):
     rendered_movie_output_path: str | None = None
     non_dw_sum_output_path: str | None = None
     loss_trajectories_output_path: str | None = None
+    dose_weighting: str = "gg"
+
+    @field_validator("dose_weighting")  # type: ignore[misc]
+    @classmethod
+    def _validate_dose_weighting(cls, value: str) -> str:
+        """Check the value is "gg", "default" or an existing table file."""
+        return validate_dose_weighting(value)
 
     @property
     def output_paths(self) -> list[str]:

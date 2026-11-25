@@ -1,5 +1,9 @@
 """Functions for generating an image from a movie."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import numpy as np
 import torch
 from torch_fourier_filter.dose_weight import (
@@ -7,6 +11,11 @@ from torch_fourier_filter.dose_weight import (
     dose_weight_normalization_grid,
 )
 from torch_fourier_rescale import fourier_rescale_2d
+
+from ripple.core.dose_weighting import frame_weights_module
+
+if TYPE_CHECKING:
+    from torch_fourier_filter.frame_weights import FrameWeightTable
 
 DEFAULT_DOSE_WEIGHT_CHUNK_SIZE = 8
 
@@ -78,6 +87,7 @@ def fourier_crop_shape(
 
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+# pylint: disable=too-many-branches
 def generate_summed_images(
     movie: torch.Tensor,
     pixel_size: float,
@@ -89,6 +99,7 @@ def generate_summed_images(
     non_dose_weighted: bool = True,
     device: torch.device | str | None = None,
     chunk_size: int = DEFAULT_DOSE_WEIGHT_CHUNK_SIZE,
+    frame_weights: FrameWeightTable | None = None,
 ) -> tuple[torch.Tensor | None, torch.Tensor | None, float]:
     """Sum a movie with and/or without dose weighting, in one chunked pass.
 
@@ -125,6 +136,10 @@ def generate_summed_images(
         `movie`'s device.
     chunk_size: int
         Number of frames transferred to `device` and processed at a time.
+    frame_weights: FrameWeightTable | None
+        Per-frame B-factor weights for the dose-weighted sum (one row per frame; see
+        :func:`ripple.core.dose_weighting.movie_frame_weight_table`). If None (the
+        default), the Grant & Grigorieff weights are used, as before.
 
     Returns
     -------
@@ -147,11 +162,28 @@ def generate_summed_images(
     )
     dft_shape = (out_shape[0], out_shape[1] // 2 + 1)
 
-    # Critical-exposure and normalization grids for dose weighting, if requested.
-    # Only (H, W) shaped, not copied across all frames
+    if frame_weights is not None and frame_weights.n_frames != n_frames:
+        raise ValueError(
+            f"frame_weights has {frame_weights.n_frames} frames, the movie {n_frames}"
+        )
+
+    # Critical-exposure (or frequency) and normalization grids for dose weighting,
+    # if requested. Only (H, W) shaped, not copied across all frames
     dose_weighting = None
     dw_dft = None
-    if dose_weighted:
+    if dose_weighted and frame_weights is not None:
+        fwm = frame_weights_module()
+        dose_weighting = fwm.frame_weights_normalization_grid(
+            frame_weights,
+            image_shape=out_shape,
+            pixel_size=out_pixel_size,
+            rfft=True,
+            fftshift=False,
+            device=compute_device,
+            chunk_size=chunk_size,
+        )
+        dw_dft = torch.zeros(dft_shape, dtype=complex_dtype, device=compute_device)
+    elif dose_weighted:
         dose_weighting = dose_weight_normalization_grid(
             image_shape=out_shape,
             pixel_size=out_pixel_size,
@@ -190,17 +222,28 @@ def generate_summed_images(
         chunk_dft = torch.fft.rfft2(chunk, dim=(-2, -1))  # pylint: disable=not-callable
         del chunk  # free the real-space chunk before dose weighting
 
-        critical_exposure, normalization = dose_weighting
-        chunk_dft = dose_weight_frame_chunk(
-            chunk_dft=chunk_dft,
-            frame_start_idx=start,
-            Ne=critical_exposure,
-            normalization=normalization,
-            pre_exposure=pre_exposure,
-            dose_per_frame=fluence_per_frame,
-            voltage=voltage,
-            in_place=True,
-        )
+        if frame_weights is not None:
+            frequency, log_normalization = dose_weighting
+            chunk_dft = frame_weights_module().frame_weights_chunk(
+                chunk_dft,
+                frame_start_idx=start,
+                table=frame_weights,
+                frequency=frequency,
+                log_normalization=log_normalization,
+                in_place=True,
+            )
+        else:
+            critical_exposure, normalization = dose_weighting
+            chunk_dft = dose_weight_frame_chunk(
+                chunk_dft=chunk_dft,
+                frame_start_idx=start,
+                Ne=critical_exposure,
+                normalization=normalization,
+                pre_exposure=pre_exposure,
+                dose_per_frame=fluence_per_frame,
+                voltage=voltage,
+                in_place=True,
+            )
         dw_dft += torch.sum(chunk_dft, dim=0)
 
     dw_image = None
@@ -225,6 +268,8 @@ def generate_dose_weighted_image(
     voltage: float,
     device: torch.device | str | None = None,
     chunk_size: int = DEFAULT_DOSE_WEIGHT_CHUNK_SIZE,
+    frame_weights: FrameWeightTable | None = None,
+    super_resolution_factor: int = 1,
 ) -> torch.Tensor:
     """Dose weight the movie and sum into a single 2D image.
 
@@ -248,6 +293,12 @@ def generate_dose_weighted_image(
         current device.
     chunk_size: int
         Number of frames transferred to `compute_device` and processed at a time.
+    frame_weights: FrameWeightTable | None
+        Per-frame B-factor weights (one row per frame). If None (the default), the
+        Grant & Grigorieff weights are used.
+    super_resolution_factor: int
+        Integer factor by which to Fourier-crop the frames before summing (see
+        :func:`generate_summed_images`). Default 1 (no cropping).
 
     Returns
     -------
@@ -260,10 +311,12 @@ def generate_dose_weighted_image(
         pre_exposure,
         fluence_per_frame,
         voltage,
+        super_resolution_factor=super_resolution_factor,
         dose_weighted=True,
         non_dose_weighted=False,
         device=device,
         chunk_size=chunk_size,
+        frame_weights=frame_weights,
     )
     assert dw_image is not None
     return dw_image
@@ -296,6 +349,7 @@ def _dose_weight_movie_to_image_streaming(
     dose_per_frame: float,
     voltage: float,
     chunk_size: int,
+    frame_weights: FrameWeightTable | None = None,
 ) -> torch.Tensor:
     """
     Dose weight `movie` and sum to a single 2D image, one chunk at a time.
@@ -304,24 +358,40 @@ def _dose_weight_movie_to_image_streaming(
     -----
     Only elementwise operations are performed so function should be safe to call under
     autograd. The `chunk_size` parameter controls how many frames are processed
-    simultaneously.
+    simultaneously. With `frame_weights`, the per-frame B-factor weights replace the
+    G&G weights.
     """
     frame_shape = (movie.shape[-2], movie.shape[-1])
     n_frames = movie.shape[0]
+    if frame_weights is not None and frame_weights.n_frames != n_frames:
+        raise ValueError(
+            f"frame_weights has {frame_weights.n_frames} frames, the movie {n_frames}"
+        )
 
-    critical_exposure, normalization = dose_weight_normalization_grid(
-        image_shape=frame_shape,
-        pixel_size=pixel_size,
-        n_frames=n_frames,
-        pre_exposure=pre_exposure,
-        dose_per_frame=dose_per_frame,
-        voltage=voltage,
-        crit_exposure_bfactor=-1,
-        rfft=True,
-        fftshift=False,
-        device=movie.device,
-        chunk_size=chunk_size,
-    )
+    if frame_weights is not None:
+        grids = frame_weights_module().frame_weights_normalization_grid(
+            frame_weights,
+            image_shape=frame_shape,
+            pixel_size=pixel_size,
+            rfft=True,
+            fftshift=False,
+            device=movie.device,
+            chunk_size=chunk_size,
+        )
+    else:
+        grids = dose_weight_normalization_grid(
+            image_shape=frame_shape,
+            pixel_size=pixel_size,
+            n_frames=n_frames,
+            pre_exposure=pre_exposure,
+            dose_per_frame=dose_per_frame,
+            voltage=voltage,
+            crit_exposure_bfactor=-1,
+            rfft=True,
+            fftshift=False,
+            device=movie.device,
+            chunk_size=chunk_size,
+        )
 
     image_dw = torch.zeros(frame_shape, dtype=movie.dtype, device=movie.device)
     for start in range(0, n_frames, chunk_size):
@@ -329,15 +399,24 @@ def _dose_weight_movie_to_image_streaming(
         chunk_dft = torch.fft.rfft2(  # pylint: disable=not-callable
             movie[start:end], dim=(-2, -1), norm="ortho"
         )
-        chunk_dft = dose_weight_frame_chunk(
-            chunk_dft=chunk_dft,
-            frame_start_idx=start,
-            Ne=critical_exposure,
-            normalization=normalization,
-            pre_exposure=pre_exposure,
-            dose_per_frame=dose_per_frame,
-            voltage=voltage,
-        )
+        if frame_weights is not None:
+            chunk_dft = frame_weights_module().frame_weights_chunk(
+                chunk_dft,
+                frame_start_idx=start,
+                table=frame_weights,
+                frequency=grids[0],
+                log_normalization=grids[1],
+            )
+        else:
+            chunk_dft = dose_weight_frame_chunk(
+                chunk_dft=chunk_dft,
+                frame_start_idx=start,
+                Ne=grids[0],
+                normalization=grids[1],
+                pre_exposure=pre_exposure,
+                dose_per_frame=dose_per_frame,
+                voltage=voltage,
+            )
         chunk_dw = torch.fft.irfft2(  # pylint: disable=not-callable
             chunk_dft, s=frame_shape, dim=(-2, -1), norm="ortho"
         )
@@ -354,6 +433,7 @@ def dose_weight_memory_efficient(
     voltage: float = 300.0,
     memory_strategy: str = "checkpointing",
     chunk_size: int = 10,
+    frame_weights: FrameWeightTable | None = None,
 ) -> torch.Tensor:
     """Dose weight a movie and sum into a single 2D image, differentiably.
 
@@ -376,6 +456,9 @@ def dose_weight_memory_efficient(
         it instead of storing any of the per-chunk intermediates).
     chunk_size : int
         Number of frames processed at a time.
+    frame_weights : FrameWeightTable | None
+        Per-frame B-factor weights (one row per frame). If None (the default), the
+        Grant & Grigorieff weights are used.
 
     Returns
     -------
@@ -384,7 +467,13 @@ def dose_weight_memory_efficient(
     """
     if memory_strategy == "full":
         return _dose_weight_movie_to_image_streaming(
-            movie, pixel_size, pre_exposure, dose_per_frame, voltage, chunk_size
+            movie,
+            pixel_size,
+            pre_exposure,
+            dose_per_frame,
+            voltage,
+            chunk_size,
+            frame_weights,
         )
     if memory_strategy == "checkpointing":
         return torch.utils.checkpoint.checkpoint(
@@ -395,6 +484,7 @@ def dose_weight_memory_efficient(
             dose_per_frame,
             voltage,
             chunk_size,
+            frame_weights,
             use_reentrant=False,
         )
     raise ValueError(f"Unknown memory strategy: {memory_strategy}")

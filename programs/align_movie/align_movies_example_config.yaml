@@ -36,6 +36,7 @@ output_config:
   rendered_movie_output_path: null                                    # (optional)  Path to save pre-processed & rendered movie (gain/dark corrected, hot-pixel adjusted), in MRC format. If null, not saved.
   motion_corrected_movie_output_path: null                            # (optional)  Path to save motion corrected movie (aligned, but not summed frames), in MRC format. If null, not saved.
   loss_trajectories_output_path: null                                 # (optional)  Path to save loss trajectories during optimization, in .csv format. If null, not saved.
+  dose_weighting: gg                                                  # (optional, default gg)  Frame weights of the dose-weighted sum: "gg" (Grant & Grigorieff 2015), "default" (per-frame B-factors from the default exposure curve), or a path to a frame weight table (.json) from estimate_frame_weights.
 
 
 # --- Parameters for alignment optimization stage ----

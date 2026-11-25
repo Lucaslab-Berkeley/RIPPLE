@@ -1,0 +1,44 @@
+##########################################
+###   Re-sum (no re-alignment) config   ###
+##########################################
+# Re-sums a movie with new frame weights from the deformation field an alignment run
+# saved (run_align_movies.py). The movie is prepared exactly as in that run, so copy
+# its computational_config and movie_config sections here unchanged.
+#
+#   python run_resum.py resum_example_config.yaml                       # one movie
+#   python run_resum.py resum_example_config.yaml --movie-dir ../../example/movies
+#
+# With --movie-dir, file names below are prefixed with each movie's stem, as in
+# run_align_movies.py (def_field.csv -> <stem>_def_field.csv).
+
+computational_config:
+  gpu_id: 0                 # Integer (0), "cuda:0", or "cpu".
+  keep_movie_on_cpu: true   # Keep the movie in CPU RAM and stream frames to the GPU (needed for large super-resolution movies).
+
+# --- The movie, prepared as in the alignment run (copy that run's movie_config) ---
+movie_config:
+  movie_path: "movies/my_movie.eer"
+  pixel_size: 0.936
+  super_resolution_factor: 1
+  fluence: 54.5
+  fluence_per_frame: 1.0
+  pre_exposure: 0.0
+  voltage: 300.0
+  gain_path: null
+  dark_path: null
+  gain_flip: 0
+  gain_rot: 0
+  multiply_gain: true
+  eer_render_chunk_size: 9
+
+deformation_field_path: ../../example/output/def_field.csv  # (required) The field the alignment run saved (.csv, .h5 or .hdf5).
+grid_type: catmull_rom                                       # (optional, default catmull_rom) The alignment run's grid_type; CSV fields do not record it.
+skip_movie_preparation: false                                # (optional, default false) The alignment run's skip_movie_preparation.
+
+# --- Outputs ---
+output_config:
+  allow_file_overwrite: false
+  dose_weighting: default                                    # "gg" (reproduces the alignment run's dw_sum), "default", or a frame weight table (.json) from estimate_frame_weights.
+  dw_sum_output_path: ../../example/output/fw_sum.mrc        # Re-weighted sum, at pixel_size * super_resolution_factor.
+  non_dw_sum_output_path: null                               # (optional) Plain sum.
+  motion_corrected_movie_output_path: null                   # (optional) The aligned frames, at pixel_size (input to estimate_frame_weights' aligned_movie_path).
