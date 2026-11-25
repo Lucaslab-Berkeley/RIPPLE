@@ -188,6 +188,18 @@ class FrameWeightsEstimation(BaseModelTeamTomo):
         ``random``: ``n_random`` random orientations per particle (slow; for checks).
     n_random : int
         Random orientations per particle for ``null_model: random``.
+    noise_window : Literal["envelope", "box"]
+        For the template envelope fit, which maximises the particles' z as a search
+        computes it: the null variance from the image around each particle weighted
+        by the projections' mean energy profile (``envelope``, as a search's
+        per-pixel variance, the particle's own power included) or by the whole box
+        evenly (``box``). The per-frame B and C fit always uses the even box.
+    null_mean : bool
+        For the template envelope fit: subtract the null's mean (the correlation
+        with the mean projection over orientations, as a search's per-pixel mean)
+        and keep its power out of the null variance.
+    n_envelope_orientations : int
+        Random orientations for the energy profile.
     min_snr : float
         Bins fitted: a contiguous run from ``min_resolution`` whose summed signal is
         at least this many standard errors.
@@ -223,6 +235,9 @@ class FrameWeightsEstimation(BaseModelTeamTomo):
     reference_weights: Literal["gg", "default"] = "gg"
     null_model: Literal["analytic", "random"] = "analytic"
     n_random: int = Field(default=1024, ge=2)
+    noise_window: Literal["envelope", "box"] = "envelope"
+    null_mean: bool = True
+    n_envelope_orientations: int = Field(default=256, ge=8)
     min_snr: float = 5.0
     min_resolution: float = 40.0
     reference_frame: int | None = None

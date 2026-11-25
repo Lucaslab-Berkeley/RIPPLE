@@ -27,7 +27,11 @@ from torch_fourier_filter.frame_weights import (
 
 from ripple.core import frame_weights as fw
 from ripple.core.particle_pieces import (
+    compute_movie_pieces,
+    hypothesis_statistics,
+    mean_projection,
     particle_template_filter,
+    real_projections,
     rfft_grid_bins,
     template_projections,
 )
@@ -205,6 +209,91 @@ def test_estimator_recovers_frame_bfactors(synthetic):
     assert info["mean_z_matched_corrected"] >= info["mean_z_matched"] - 1e-9
     with open(out / "frame_weights_diagnostics.json", encoding="utf-8") as f:
         assert json.load(f)["frames"] == N_FRAMES
+
+
+def _leopard_kwargs(synthetic):
+    tmp, kwargs = synthetic
+    df = pd.read_csv(tmp / "particles.csv", index_col=0)
+    manager = EstimateFrameWeightsManager(**kwargs(tmp / "lkw"))
+    return manager.leopard_kwargs(df, str(tmp / "noise_sum.mrc"), tmp / "lkw.csv", T)
+
+
+def test_mean_projection_matches_sampled_orientations(synthetic):
+    """The shell-average mean projection is the mean over uniform orientations."""
+    import roma
+
+    lkw = _leopard_kwargs(synthetic)
+    filt, _ = particle_template_filter(lkw, 0, "cpu")
+    stats = hypothesis_statistics(lkw, filt, BOX, WINDOW, "box")
+    mproj, energy = mean_projection(stats, filt)
+    rots = roma.random_rotmat(4000, generator=torch.Generator().manual_seed(5))
+    proj = torch.cat(
+        [real_projections(lkw, rots[i : i + 500], filt) for i in range(0, 4000, 500)]
+    )
+    sampled = proj.mean(0)
+    r = np.corrcoef(mproj.flatten().numpy(), sampled.flatten().numpy())[0, 1]
+    assert r > 0.98, r
+    assert abs(float((mproj * sampled).sum() / (mproj * mproj).sum()) - 1) < 0.05
+    sampled_energy = float((proj.double() ** 2).sum((1, 2)).mean())
+    assert abs(energy / sampled_energy - 1) < 0.05, (energy, sampled_energy)
+
+
+def test_envelope_window_keeps_flat_noise_variance(synthetic):
+    """On white noise the windowed null variance equals the even box's on average."""
+    lkw = _leopard_kwargs(synthetic)
+    gen = torch.Generator().manual_seed(11)
+    frames = torch.randn(4, 4 * BOX, 4 * BOX, generator=gen)
+    pos = np.array([[y, x] for y in (8, 2 * BOX) for x in (8, 2 * BOX)])
+    edges = fw.radial_bin_edges(8)
+    covs = {}
+    for kind in ("box", "envelope"):
+        mp = compute_movie_pieces(
+            frames,
+            lkw,
+            pos,
+            T,
+            edges,
+            WINDOW,
+            "cpu",
+            n_verify=0,
+            noise_window=kind,
+            null_mean=False,
+        )
+        covs[kind] = torch.diagonal(mp.noise_cov, dim1=-2, dim2=-1).sum((0, 2))
+    ratio = (covs["envelope"][1:] / covs["box"][1:]).numpy()
+    assert np.all(np.abs(ratio - 1) < 0.15), ratio
+    assert abs(ratio.mean() - 1) < 0.05, ratio
+
+
+def test_null_mean_matches_random_orientations(synthetic):
+    """The analytic null mean is the mean over random orientations, up to scale."""
+    tmp, _ = synthetic
+    lkw = _leopard_kwargs(synthetic)
+    frames = torch.from_numpy(np.asarray(mrcfile.read(tmp / "aligned.mrc"), np.float32))
+    df = pd.read_csv(tmp / "particles.csv", index_col=0)
+    pos = np.stack([df.pos_y.to_numpy(), df.pos_x.to_numpy()], 1)[:12].astype(int)
+    kw = {
+        k: (v[:12] if isinstance(v, torch.Tensor) and v.shape[:1] == (len(df),) else v)
+        for k, v in lkw.items()
+    }
+    mp = compute_movie_pieces(
+        frames,
+        kw,
+        pos,
+        T,
+        fw.radial_bin_edges(8),
+        WINDOW,
+        "cpu",
+        n_random=1024,
+        n_verify=0,
+        null_mean=True,
+    )
+    analytic = mp.null_mean.sum(1)  # (n, bins), all frames
+    sampled = mp.null_random.float().mean(1).sum(1)
+    r = np.corrcoef(analytic.flatten().numpy(), sampled.flatten().numpy())[0, 1]
+    assert r > 0.9, r
+    scale = float((analytic * sampled).sum() / (sampled * sampled).sum())
+    assert 0.8 < scale < 1.25, scale
 
 
 def test_existing_outputs_are_not_overwritten(synthetic):

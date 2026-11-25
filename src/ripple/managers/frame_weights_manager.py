@@ -316,6 +316,9 @@ class EstimateFrameWeightsManager(BaseModelTeamTomo):
                 n_random=est.n_random if est.null_model == "random" else 0,
                 n_verify=est.n_verify,
                 seed=est.seed,
+                noise_window=est.noise_window,
+                null_mean=est.null_mean,
+                n_envelope=est.n_envelope_orientations,
             )
             mp.frame_cross_spectra = spectra
             del frames, kw
@@ -349,6 +352,18 @@ class EstimateFrameWeightsManager(BaseModelTeamTomo):
         movie_index = np.concatenate([np.full(len(t), m) for m, t in enumerate(tables)])
         c = torch.cat([p.c for p in pieces])
         cov = torch.cat([p.noise_cov for p in pieces])
+        # the search's null for the z objective (the envelope fit): its mean, and
+        # its variance as the search's per-pixel variance
+        null_mean = (
+            torch.cat([p.null_mean for p in pieces])
+            if all(p.null_mean is not None for p in pieces)
+            else None
+        )
+        cov_z = (
+            torch.cat([p.noise_cov_z for p in pieces])
+            if all(p.noise_cov_z is not None for p in pieces)
+            else cov
+        )
         nf = c.shape[1]
         if any(p.c.shape[1] != nf for p in pieces):
             raise ValueError("every movie must have the same number of frames")
@@ -440,12 +455,16 @@ class EstimateFrameWeightsManager(BaseModelTeamTomo):
                 "resolution_range_A": [float(1 / kb[use[0]]), float(1 / kb[use[-1]])],
                 "reference_weights": est.reference_weights,
                 "null_model": est.null_model,
+                "noise_window": est.noise_window,
+                "null_mean": est.null_mean,
                 "prior": est.prior,
             },
         )
 
         # 3. the template envelope: matched to the table, times a fitted correction
-        envelope, env_info = self._envelope(table, c, cov, sig, kb, movie_index, pieces)
+        envelope, env_info = self._envelope(
+            table, c, cov_z, sig, kb, movie_index, pieces, null_mean
+        )
 
         # 4. outputs
         table.to_json(self.output.path(self.output.frame_weights_name))
@@ -511,6 +530,8 @@ class EstimateFrameWeightsManager(BaseModelTeamTomo):
                 {
                     "c": c,
                     "noise_cov": cov,
+                    "noise_cov_z": cov_z if cov_z is not cov else None,
+                    "null_mean": null_mean,
                     "movie_index": movie_index,
                     "frame_cross_spectra": [p.frame_cross_spectra for p in pieces],
                     "edges": edges,
@@ -557,6 +578,7 @@ class EstimateFrameWeightsManager(BaseModelTeamTomo):
         kb: np.ndarray,
         movie_index: np.ndarray,
         pieces: list[MoviePieces],
+        null_mean: torch.Tensor | None = None,
     ) -> tuple[TemplateEnvelope, dict[str, Any]]:
         """The matched envelope and its fitted correction (see the class docstring)."""
         est = self.estimation
@@ -572,7 +594,7 @@ class EstimateFrameWeightsManager(BaseModelTeamTomo):
             u2[movie_index == m] = np.where(
                 p_w > 0, p_ref / np.maximum(p_w, 1e-300), 1.0
             )
-        coeffs = fw.sum_coefficients(c, cov, weights, u2)
+        coeffs = fw.sum_coefficients(c, cov, weights, u2, null_mean=null_mean)
         fwm = frame_weights_module()
         matched = fwm.matched_envelope(torch.as_tensor(kb), table).numpy()
         current = self.template_envelope.curve(kb)
