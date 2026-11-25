@@ -1,14 +1,14 @@
 """Utility functions shared across core modules."""
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pandas as pd
 import torch
 import yaml
 
-# TODO: Open PR in leopard-em lines 17-19 to update imports for torch-motion-correction
-# leopard_em/pydantic_models/data_structures/particle_stack.py
-# from leopard_em.pydantic_models.managers import RefineTemplateManager
+if TYPE_CHECKING:
+    from leopard_em.pydantic_models.managers import RefineTemplateManager
 
 
 def get_batch_mean_std_stacks(
@@ -270,12 +270,15 @@ def _create_batch_configs(
     return batch_config_paths, batch_particle_indices
 
 
-# TODO: re-enable
 def _make_differentiable_refine_manager(
     refine_config_path: str,
-) -> "RefineTemplateManager":  # type: ignore[name-defined]
+) -> "RefineTemplateManager":
     """
     Make a differentiable refine manager from a particle results path.
+
+    Leopard-EM is imported here rather than at module level: importing its backend
+    turns autograd off for the whole process, and polishing needs it, so the grad
+    mode is restored after the import.
 
     Parameters
     ----------
@@ -284,11 +287,16 @@ def _make_differentiable_refine_manager(
 
     Returns
     -------
-    DifferentiableRefineManager
-        The differentiable refine manager.
+    RefineTemplateManager
+        The refine manager, with its movie config disabled.
     """
-    pass
-    # refine_manager = RefineTemplateManager.from_yaml(refine_config_path)
-    # # override the movie_params here
-    # refine_manager.movie_config.enabled = False
-    # return refine_manager
+    grad_enabled = torch.is_grad_enabled()
+    try:
+        # pylint: disable-next=import-outside-toplevel
+        from leopard_em.pydantic_models.managers import RefineTemplateManager
+    finally:
+        torch.set_grad_enabled(grad_enabled)
+    refine_manager = RefineTemplateManager.from_yaml(refine_config_path)
+    # override the movie_params here
+    refine_manager.movie_config.enabled = False
+    return refine_manager

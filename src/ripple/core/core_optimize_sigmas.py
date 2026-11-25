@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 """Core functions for optimizing sigma hyperparameters."""
 
 import gc
@@ -246,6 +247,7 @@ def core_optimize_sigmas(
     )
 
 
+# pylint: disable-next=too-many-branches,too-many-statements
 def optimize_sigmas_2dtm_nelder_mead(
     image: torch.Tensor,  # (t, H, W)
     var_image: torch.Tensor,
@@ -777,6 +779,7 @@ def optimize_sigmas_2dtm_nelder_mead(
     return result_dict
 
 
+# pylint: disable-next=too-many-statements
 def optimize_sigmas_2dtm_optuna(
     image: torch.Tensor,  # (t, H, W)
     var_image: torch.Tensor,
@@ -1379,6 +1382,7 @@ def _compute_validation_loss_common(
     return val_loss
 
 
+# pylint: disable-next=too-many-branches,too-many-statements
 def _collect_sigma_parameters(
     prior_type: str,
     sigma_a_exponential: bool,
@@ -2155,6 +2159,9 @@ def _run_inner_optimization_common(
                 else result["refined_cross_correlation"]
             )
 
+            # The grid's `data` property is detached; the priors need `_data`'s
+            # gradient.
+            # pylint: disable=protected-access
             if prior_type == "laplacian":
                 e_space, e_time = laplacian_compute(
                     deformation_field._data,

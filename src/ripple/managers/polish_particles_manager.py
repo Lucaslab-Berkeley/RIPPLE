@@ -1,3 +1,4 @@
+# pylint: disable=duplicate-code
 """Manager for polishing particles."""
 
 from typing import TYPE_CHECKING, Any, ClassVar
