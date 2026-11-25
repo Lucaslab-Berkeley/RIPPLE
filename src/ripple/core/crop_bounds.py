@@ -100,6 +100,7 @@ def _center_span(
     return new_lo, new_hi
 
 
+# pylint: disable=too-many-locals
 def _apply_round_to(
     bounds: tuple[int, int, int, int],
     round_to: int,
@@ -119,6 +120,7 @@ def _apply_round_to(
     return new_min_y, new_max_y, new_min_x, new_max_x
 
 
+# pylint: disable=too-many-locals
 def _apply_target_shape(
     bounds: tuple[int, int, int, int],
     target_shape: tuple[int, int],

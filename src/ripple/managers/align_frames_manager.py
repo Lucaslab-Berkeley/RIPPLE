@@ -77,8 +77,14 @@ class AlignFramesManager(BaseModelTeamTomo):
     ) -> torch.Tensor:
         """Load and prepare the movie (gain/dark correction, mask, mean-zero).
 
+        This is the first step of an alignment run, so it first checks every
+        configured output can be written (see
+        :meth:`~ripple.config.OutputConfig.check_output_paths`) before loading
+        anything.
+
         Honors ``alignment_config.skip_movie_preparation``. When True, the loaded movie
-        is returned as-is with no gain/dark/mask/mean-zero/crop correction applied.
+        is only cast to float32, with no gain/dark/mask/mean-zero/crop correction
+        applied.
 
         Parameters
         ----------
@@ -103,7 +109,14 @@ class AlignFramesManager(BaseModelTeamTomo):
         -------
         torch.Tensor
             Prepared movie tensor ready for motion estimation.
+
+        Raises
+        ------
+        ValueError
+            If an output cannot be written, or already exists while
+            ``output_config.allow_file_overwrite`` is False.
         """
+        self.output_config.check_output_paths()
         movie, gain_map, dark_map, mask = manager_utils.load_missing_tensors(
             self.computational_config,
             self.movie_config,
@@ -131,20 +144,20 @@ class AlignFramesManager(BaseModelTeamTomo):
     ) -> tuple[DeformationField, OptimizationTracker]:
         """Estimate motion via optional XC pre-pass then gradient-based optimization.
 
-        If ``alignment_config.use_xc_prepass`` is True and no
-        ``initial_deformation_field`` is provided, a fast whole-image
+        If ``alignment_config.use_xc_prepass`` is True, a fast whole-image
         cross-correlation pass runs first to estimate global per-frame shifts.
         Those shifts seed the deformation field so the gradient optimizer
-        starts from a good global motion estimate.
+        starts from a good global motion estimate. The XC pre-pass and an initial
+        deformation field are mutually exclusive ways of seeding the optimizer.
 
         Parameters
         ----------
         movie: torch.Tensor
             Prepared movie tensor (output of :meth:`prepare_movie`).
         initial_deformation_field: DeformationField | None
-            Explicit starting field. When provided, the XC pre-pass is skipped.
-            When None and ``use_xc_prepass`` is True, the XC pre-pass runs
-            automatically.
+            Explicit starting field. If None, falls back to
+            ``alignment_config.deformation_field_path`` (or zero-initialisation if
+            that is unset). Only allowed when ``use_xc_prepass`` is False.
 
         Returns
         -------
@@ -156,8 +169,12 @@ class AlignFramesManager(BaseModelTeamTomo):
         ValueError
             If ``use_xc_prepass`` is True and an initial deformation field is
             also given, whether passed explicitly via `initial_deformation_field`
-            or loaded from ``alignment_config.deformation_field_path``.
+            or loaded from ``alignment_config.deformation_field_path``. Also if an
+            output cannot be written, or already exists while
+            ``output_config.allow_file_overwrite`` is False (checked before any
+            alignment work, in case :meth:`prepare_movie` was bypassed).
         """
+        self.output_config.check_output_paths()
         initial_deformation_field = (
             initial_deformation_field
             if initial_deformation_field is not None

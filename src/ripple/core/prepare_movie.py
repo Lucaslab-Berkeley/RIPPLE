@@ -31,10 +31,15 @@ def prepare_movie(
 ) -> torch.Tensor:
     """Prepare the movie for alignment.
 
+    Each chunk of frames is cast to float32, dark-subtracted, gain-corrected
+    (``(raw - dark) * gain``, or ``(raw - dark) / gain`` if `multiply_gain` is False),
+    hot-pixel filtered, masked, and set to zero mean. `movie` itself is never
+    modified.
+
     Parameters
     ----------
     movie: torch.Tensor
-        The movie to prepare.
+        The movie to prepare. May have any real dtype (e.g. integer counts).
     gain_map: Optional[torch.Tensor]
         The gain map to apply to the movie. If None, the gain map will be
         initialized to zero.
@@ -42,9 +47,10 @@ def prepare_movie(
         The dark map to apply to the movie. If None, the dark map will be
         initialized to zero.
     gain_flip: int
-        Flip applied to gain and dark reference maps (0 = none, 1 = flipY, 2 = flipX).
+        Flip applied to gain and dark reference maps after any rotation (0 = none,
+        1 = flipY, 2 = flipX).
     gain_rot: int
-        Rotation applied to gain and dark reference maps (0–3, CCW quarter turns).
+        Rotation applied to gain and dark reference maps (0-3, CCW quarter turns).
     multiply_gain: bool = True
         Whether to multiply the movie by the gain map or divide the movie by the
         gain map.
@@ -101,18 +107,22 @@ def prepare_movie(
     chunk_size = max(1, min(chunk_size, n_frames))
     prepared = torch.empty(movie.shape, dtype=torch.float32, device=target_device)
 
-    # Iterate over each chunk of frames
+    # Iterate over each chunk of frames. The raw movie may hold integer counts; each
+    # chunk is cast to float32 here, so the whole movie never is.
     for start in range(0, n_frames, chunk_size):
         end = min(start + chunk_size, n_frames)
         chunk = movie[start:end].to(device=compute_device, dtype=torch.float32)
+        # Dark is an additive offset of the raw counts, so subtract it before gain
+        chunk = apply_dark(chunk, dark_map)
         chunk = apply_gain(
             chunk, gain_map, prep_gain_flip, prep_gain_rot, multiply_gain
         )
-        chunk = apply_dark(chunk, dark_map)
         chunk = remove_hot_pixels(chunk)
         chunk = apply_mask(chunk, mask, fill_noise=mask_fill_noise)
         frame_means = torch.mean(chunk, dim=(1, 2), keepdim=True)
-        chunk -= frame_means
+        # Out-of-place: `chunk` may still alias the caller's `movie` when it was
+        # already float32 on `compute_device` and no step above copied it.
+        chunk = chunk - frame_means
         prepared[start:end] = chunk.to(target_device)
 
     return prepared
@@ -123,14 +133,20 @@ def transform_reference_map(
     gain_flip: int,
     gain_rot: int,
 ) -> torch.Tensor:
-    """Flip and rotate a gain or dark reference so it aligns with the movie grid.
+    """Rotate and then flip a gain or dark reference to align it with the movie grid.
+
+    The same transform as MotionCor2's ``-RotGain``/``-FlipGain`` and RELION's
+    ``--gain_rot``/``--gain_flip``: rotate first, then flip. Row 0 is y = 0, so a
+    counter-clockwise rotation with y up (as displayed in IMOD) is ``rot90`` with
+    negative ``k``; ``gain_rot=1`` takes the input pixel at row ``h - 1 - x'``,
+    column ``y'`` to row ``y'``, column ``x'``.
 
     Parameters
     ----------
     reference_map : torch.Tensor
         2-D reference map with shape ``(height, width)`` (gain or dark).
     gain_flip : int
-        Flip to apply: 0 = none, 1 = flipY, 2 = flipX.
+        Flip to apply after the rotation: 0 = none, 1 = flipY, 2 = flipX.
     gain_rot : int
         Rotation to apply: 0 = none, 1 = 90°, 2 = 180°, 3 = 270° (CCW).
 
@@ -139,13 +155,13 @@ def transform_reference_map(
     torch.Tensor
         Transformed reference map, same dtype/device as the input.
     """
+    if gain_rot != 0:
+        reference_map = torch.rot90(reference_map, k=-gain_rot)
+
     if gain_flip == 1:
         reference_map = reference_map.flip(0)  # flipY
     elif gain_flip == 2:
         reference_map = reference_map.flip(1)  # flipX
-
-    if gain_rot != 0:
-        reference_map = torch.rot90(reference_map, k=-gain_rot)
 
     return reference_map
 
@@ -167,12 +183,13 @@ def apply_gain(
     gain_map : torch.Tensor | None
         The gain map to apply to the movie. If None, returns the movie unchanged.
     gain_flip : int
-        The flip to apply to the gain map.
+        The flip to apply to the gain map, after any rotation (see
+        :func:`transform_reference_map`).
         0: no flip
         1: flipY
         2: flipX
     gain_rot : int
-        The rotation to apply to the gain map.
+        The counter-clockwise rotation to apply to the gain map.
         0: no rotation
         1: 90 degrees
         2: 180 degrees
@@ -251,7 +268,7 @@ def remove_hot_pixels(movie: torch.Tensor, threshold: float = 10.0) -> torch.Ten
         return movie
 
     kernel = _NEIGHBOR_AVERAGE_KERNEL.to(device=movie.device, dtype=movie.dtype)
-    neighbor_average = F.conv2d(
+    neighbor_average = F.conv2d(  # pylint: disable=not-callable
         movie.unsqueeze(1), kernel.view(1, 1, 3, 3), padding=1
     ).squeeze(1)
 
@@ -274,7 +291,8 @@ def apply_mask(
         returns the movie unchanged (`fill_noise` has no effect without a mask).
     fill_noise : bool
         If True, replace pixels where `mask == 0` with per-frame Poisson noise
-        instead of multiplying the movie by `mask`. Ignored if `mask` is None.
+        instead of multiplying the movie by `mask`. The Poisson rate is the frame's
+        mean over pixels where `mask > 0`. Ignored if `mask` is None.
 
     Returns
     -------
@@ -301,10 +319,21 @@ def apply_mask(
 
 
 def _fill_masked_noise(movie: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-    """Replace pixels where `mask == 0` with per-frame Poisson noise."""
-    _, height, width = movie.shape
-    central = movie[:, height // 4 : 3 * height // 4, width // 4 : 3 * width // 4]
-    frame_lambda = torch.clamp(torch.mean(central, dim=(1, 2), keepdim=True), min=1e-6)
+    """Replace pixels where `mask == 0` with per-frame Poisson noise.
+
+    Each frame's Poisson rate is its mean over the pixels where `mask > 0`, or over
+    the whole frame if the mask has no such pixels.
+    """
+    inside = mask > 0
+    n_inside = int(inside.sum())
+    if n_inside > 0:
+        inside_sum = torch.sum(
+            torch.where(inside, movie, 0.0), dim=(1, 2), keepdim=True
+        )
+        frame_mean = inside_sum / n_inside
+    else:
+        frame_mean = torch.mean(movie, dim=(1, 2), keepdim=True)
+    frame_lambda = torch.clamp(frame_mean, min=1e-6)
     noise = torch.poisson(frame_lambda.expand_as(movie))
 
     outside_mask = (mask == 0).unsqueeze(0).expand_as(movie)

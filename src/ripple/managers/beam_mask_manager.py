@@ -13,8 +13,7 @@ from ripple.config import (
     MovieConfig,
 )
 from ripple.core.beam_mask import (
-    estimate_beam_mask,
-    make_ellipse_mask,
+    estimate_beam_mask_and_mask,
     sum_movie_chunked,
 )
 
@@ -33,23 +32,50 @@ class BeamMaskManager(BaseModelTeamTomo):
         Parameters
         ----------
         movie : torch.Tensor | None
-            Raw movie tensor. If provided, it is used as-is. If None, loaded from
-            ``movie_config`` (``movie_config.fluence``/``fluence_per_frame`` are not
-            read by this manager and may be left at any value, e.g. 0.0, if the movie is
-            only being used for beam mask estimation).
+            Raw movie tensor. If provided, its frames are summed on the compute
+            device. If None, the frames are summed from ``movie_config.movie_path``
+            a few at a time on the CPU (see
+            :meth:`~ripple.config.MovieConfig.frame_sum`), without loading the whole
+            movie or using a GPU. ``movie_config.fluence``/``fluence_per_frame`` may
+            be left at 0.0 if the movie is only used for beam mask estimation; for
+            EER all frames are then summed.
 
         Returns
         -------
         BeamMaskResult
             Fitted ellipse and crop-bound parameters.
         """
+        result, _ = self.estimate_with_mask(movie)
+        return result
+
+    def estimate_with_mask(
+        self, movie: torch.Tensor | None = None
+    ) -> tuple[BeamMaskResult, torch.Tensor]:
+        """Like :meth:`estimate`, but also return the beam mask.
+
+        The mask is rasterised once and used for both the crop bounds and the return
+        value, so callers need not regenerate it with
+        :meth:`~ripple.config.BeamMaskResult.to_mask`.
+
+        Parameters
+        ----------
+        movie : torch.Tensor | None
+            Raw movie tensor. If None, the frames are summed from
+            ``movie_config.movie_path`` (see :meth:`estimate`).
+
+        Returns
+        -------
+        tuple[BeamMaskResult, torch.Tensor]
+            Fitted ellipse and crop-bound parameters, and the boolean
+            ``(height, width)`` mask (equal to ``result.to_mask()``).
+        """
         if movie is None:
-            movie = self.movie_config.movie
+            frame_sum = self.movie_config.frame_sum()
+        else:
+            device = self.computational_config.gpu_device
+            frame_sum = sum_movie_chunked(movie, device=device)
 
-        device = self.computational_config.gpu_device
-        frame_sum = sum_movie_chunked(movie, device=device)
-
-        result_dict = estimate_beam_mask(
+        result_dict, ellipse_mask = estimate_beam_mask_and_mask(
             frame_sum,
             self.movie_config.pixel_size,
             self.beam_mask_config.threshold_method,
@@ -57,24 +83,15 @@ class BeamMaskManager(BaseModelTeamTomo):
             working_pixel_size=self.beam_mask_config.working_pixel_size,
             edge_smoothing_sigma=self.beam_mask_config.edge_smoothing_sigma,
         )
-
-        ellipse_mask = make_ellipse_mask(
-            shape=(result_dict["image_shape_y"], result_dict["image_shape_x"]),
-            center_y=result_dict["center_y"],
-            center_x=result_dict["center_x"],
-            axis1=result_dict["axis1"],
-            axis2=result_dict["axis2"],
-            angle_deg=result_dict["angle_deg"],
-            diameter_reduction=result_dict["diameter_reduction"],
-        )
         output_bounds = self.beam_mask_config.crop_bounds_config.determine_bounds(
             ellipse_mask
         )
 
-        return BeamMaskResult(
+        result = BeamMaskResult(
             **result_dict,
             output_crop_min_y=output_bounds["min_y"],
             output_crop_max_y=output_bounds["max_y"],
             output_crop_min_x=output_bounds["min_x"],
             output_crop_max_x=output_bounds["max_x"],
         )
+        return result, torch.from_numpy(ellipse_mask)

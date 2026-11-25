@@ -2,9 +2,10 @@
 
 Notes
 -----
-This script globs all movies in a directory (eer, tif, or mrc) and applies the same
-alignment config to each movie, except the output paths which are updated per-loop. Use
-this script as an example for how to run RIPPLE on your data.
+This script globs all movies in a directory (eer, mrc/mrcs, or tif/tiff; any case) and
+applies the same alignment config to each movie, except the output paths which are
+updated per-loop. If `allow_file_overwrite` is false, movies whose outputs already exist
+are skipped. Use this script as an example for how to run RIPPLE on your data.
 """
 
 import os
@@ -13,18 +14,19 @@ from pathlib import Path
 
 from ripple.config import OutputConfig
 from ripple.managers import AlignFramesManager
+from ripple.utils.data_io import MOVIE_EXTENSIONS
 
 ALIGN_YAML_PATH = "align_movies_example_config.yaml"
 MOVIE_DIR = "../../example/movies"
 
 
 def get_movie_paths(directory: str) -> list[str]:
-    """Get the paths of the movies in the directory."""
-    movie_paths = []
-    for file in os.listdir(directory):
-        if file.endswith(".mrc") or file.endswith(".tif") or file.endswith(".eer"):
-            movie_paths.append(os.path.join(directory, file))
-    return movie_paths
+    """Get the sorted paths of the movies in the directory (extension any case)."""
+    return sorted(
+        os.path.join(directory, file)
+        for file in os.listdir(directory)
+        if file.lower().endswith(MOVIE_EXTENSIONS)
+    )
 
 
 def _stem_prefixed(template: str | None, stem: str) -> str | None:
@@ -111,7 +113,17 @@ def main():
         out_cfg.non_dw_sum_output_path = outputs.non_dw_sum_output_path
         out_cfg.loss_trajectories_output_path = outputs.loss_trajectories_output_path
 
-        # 1. Load and prepare (gain/dark correct, mean-zero)
+        # Skip movies whose outputs already exist, rather than aborting the loop
+        existing_outputs = out_cfg.existing_output_paths()
+        if existing_outputs and not out_cfg.allow_file_overwrite:
+            print(
+                f"Skipping {movie_path}: outputs already exist and "
+                f"allow_file_overwrite is false: {', '.join(existing_outputs)}"
+            )
+            continue
+
+        # 1. Load and prepare (gain/dark correct, mean-zero). Checks first that all
+        #    outputs can be written.
         prepared = manager.prepare_movie()
 
         # 2. Estimate motion: XC pre-pass seeds global shifts, then gradient
@@ -120,6 +132,9 @@ def main():
 
         # 3. Apply deformation field and write all configured outputs
         manager.correct_and_save(prepared, deformation_field, trajectory)
+
+        # Free this movie before the next one is loaded
+        del prepared, deformation_field, trajectory
 
 
 if __name__ == "__main__":

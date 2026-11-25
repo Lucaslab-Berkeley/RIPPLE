@@ -7,8 +7,11 @@ from typing import TYPE_CHECKING
 import torch
 from torch_motion_correction import DeformationField
 
-from ripple.core import fourier_crop_movie, generate_dose_weighted_image, sum_movie
 from ripple.core.crop_bounds import CropBounds
+from ripple.core.generate_image import (
+    DEFAULT_DOSE_WEIGHT_CHUNK_SIZE,
+    generate_summed_images,
+)
 from ripple.utils.data_io import (
     write_mrc_from_tensor,
     write_trajectory_to_csv,
@@ -166,11 +169,13 @@ def prepare_movie_if_needed(
     Returns
     -------
     torch.Tensor
-        The prepared movie, or the original movie if ``skip_movie_preparation`` is
-        True.
+        The prepared movie, or, if ``skip_movie_preparation`` is True, the original
+        movie cast to float32 (no other correction applied).
     """
     if alignment_config.skip_movie_preparation:
-        return movie
+        # Movies are loaded in their native dtype (often integer counts); alignment
+        # needs float32. No copy is made if the movie is already float32.
+        return movie.to(dtype=torch.float32)
     return movie_config.prepare(
         movie,
         gain_map,
@@ -195,6 +200,11 @@ def save_results(
     """
     Save the results of the alignment.
 
+    Every configured output is checked (see
+    :meth:`~ripple.config.OutputConfig.check_output_paths`) before anything is
+    written, so with ``allow_file_overwrite`` False no file is overwritten and no
+    output is written if any already exists.
+
     Parameters
     ----------
     output_config: OutputConfig
@@ -211,7 +221,7 @@ def save_results(
     trajectory: Optional[OptimizationTracker]
         The trajectory of the alignment.
     device: torch.device | None
-        Device the dose-weighting FFT compute runs on (chunked, frame-by-frame). If
+        Device the summation FFT/crop/dose-weighting compute runs on (chunked). If
         None, uses `corrected_movie`'s current device.
 
     Returns
@@ -219,32 +229,36 @@ def save_results(
     None
         None.
     """
-    summation_movie = corrected_movie
+    output_config.check_output_paths()
+
+    # Both sums come from one chunked pass over the movie. For super-resolution
+    # movies each chunk is Fourier-cropped to the output pixel size; fewer frames
+    # per chunk keep the per-chunk memory the same as at native sampling.
+    dw_movie = None
+    summed_movie = None
     summation_pixel_size = movie_config.pixel_size
-    needs_summation = (
-        output_config.dw_sum_output_path is not None
-        or output_config.non_dw_sum_output_path is not None
-    )
-    if needs_summation and movie_config.super_resolution_factor > 1:
-        summation_movie, summation_pixel_size = fourier_crop_movie(
+    needs_dw = output_config.dw_sum_output_path is not None
+    needs_non_dw = output_config.non_dw_sum_output_path is not None
+    if needs_dw or needs_non_dw:
+        factor = movie_config.super_resolution_factor
+        dw_movie, summed_movie, summation_pixel_size = generate_summed_images(
             corrected_movie,
             movie_config.pixel_size,
-            movie_config.super_resolution_factor,
+            movie_config.pre_exposure,
+            movie_config.fluence_per_frame,
+            movie_config.voltage,
+            super_resolution_factor=factor,
+            dose_weighted=needs_dw,
+            non_dose_weighted=needs_non_dw,
+            device=device,
+            chunk_size=max(1, DEFAULT_DOSE_WEIGHT_CHUNK_SIZE // factor**2),
         )
 
     # Save DW sum is wanted
     if output_config.dw_sum_output_path is not None:
-        dw_movie = generate_dose_weighted_image(
-            summation_movie,
-            summation_pixel_size,
-            movie_config.pre_exposure,
-            movie_config.fluence_per_frame,
-            movie_config.voltage,
-            device=device,
-        )
-        dw_movie = dw_movie.cpu()
+        assert dw_movie is not None
         write_mrc_from_tensor(
-            data=dw_movie,
+            data=dw_movie.cpu(),
             mrc_path=output_config.dw_sum_output_path,
             overwrite=output_config.allow_file_overwrite,
             pixel_size=summation_pixel_size,
@@ -260,10 +274,9 @@ def save_results(
 
     # Save non-dw sum movie if wanted
     if output_config.non_dw_sum_output_path is not None:
-        summed_movie = sum_movie(summation_movie)
-        summed_movie = summed_movie.cpu()
+        assert summed_movie is not None
         write_mrc_from_tensor(
-            data=summed_movie,
+            data=summed_movie.cpu(),
             mrc_path=output_config.non_dw_sum_output_path,
             overwrite=output_config.allow_file_overwrite,
             pixel_size=summation_pixel_size,

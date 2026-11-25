@@ -52,6 +52,8 @@ class CropBoundsConfig(BaseModelTeamTomo):
             `mode!='fixed_size'`, or isn't an exact multiple of `divisible_by` in both
             dimensions.
         """
+        # pylint infers `target_shape` from its None default and cannot see the checks
+        # pylint: disable=unsubscriptable-object
         if self.mode == "fixed_size" and self.target_shape is None:
             raise ValueError("target_shape must be set when mode='fixed_size'.")
         if self.mode != "fixed_size" and self.target_shape is not None:
