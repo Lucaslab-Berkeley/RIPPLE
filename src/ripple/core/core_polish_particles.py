@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines,duplicate-code
 """Core function for polishing particles.
 
 NOTE: Untested with new torch-motion-correction work, and needs some refactoring to
@@ -218,9 +219,10 @@ def core_polish_particles(
     if do_correct_motion:
         corrected_movie = correct_motion(
             image=movie,
-            deformation_grid=updated_deformation_field,
+            deformation_field=DeformationField(
+                data=updated_deformation_field, grid_type=grid_type
+            ),
             pixel_spacing=pixel_size,
-            grid_type=grid_type,
             device=device,
         )
     else:
@@ -429,10 +431,13 @@ def estimate_local_motion_2dtm_bayesian(
 
         print("Correcting motion with two grids")
 
+        # The spline grids are passed as they are: the two-grid correction only
+        # evaluates them, and wrapping the optimised grid in a DeformationField would
+        # cut its gradient (DeformationField.to rebuilds the grid).
         corrected_movie = correct_motion_two_grids(
             image=image,
-            new_deformation_grid=new_deformation_field,
-            base_deformation_grid=deformation_field,
+            new_deformation_field=new_deformation_field,
+            base_deformation_field=deformation_field,
             pixel_spacing=pixel_spacing,
             grad=True,
             device=device,
@@ -1069,6 +1074,8 @@ def _compute_loss(
         Computed loss value.
     """
     # Compute motion priors
+    # The grid's `data` property is detached; the priors need `_data`'s gradient.
+    # pylint: disable=protected-access
     e_space = torch.tensor(0.0, device=deformation_field._data.device)
     e_time = torch.tensor(0.0, device=deformation_field._data.device)
     if prior_type == "relion":
