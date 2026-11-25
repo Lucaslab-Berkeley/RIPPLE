@@ -71,7 +71,7 @@ try:
     _make_differentiable_refine_manager("missing_refine_config.yaml")
 except Exception:  # the config does not exist; only the import matters here
     pass
-assert any(name.startswith("leopard_em") for name in sys.modules)
+assert "leopard_em.pydantic_models.managers" in sys.modules, "Leopard-EM did not import"
 assert torch.is_grad_enabled(), "autograd was left off"
 """
     result = subprocess.run(

@@ -209,6 +209,15 @@ wheels = [
 ]
 
 [[package]]
+name = "cloudpickle"
+version = "3.1.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/59/df/0bf7ef6c2534c140bb4c3d787e1557542e50a96b393659efaa4f39f9a45a/cloudpickle-3.1.3.tar.gz", hash = "sha256:cbe9fde14429a5db009ea05ce94e5182cf998c97b96918d50c10f73f9c2f4f33", size = 22576, upload-time = "2026-11-18T10:27:18.82Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a4/42/3b121b42b114919ffc6195a81c1c7065a465f62f46477fbdb87a07699e51/cloudpickle-3.1.3-py3-none-any.whl", hash = "sha256:1654f4f18e416447210a63c5c25a135d65a292156aa5fa519dfa4baf7726dddb", size = 22399, upload-time = "2026-11-18T10:27:17.534Z" },
+]
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -814,10 +823,11 @@ wheels = [
 
 [[package]]
 name = "leopard-em"
-version = "1.2"
+version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "einops" },
+    { name = "h5py" },
     { name = "lmfit" },
     { name = "mrcfile" },
     { name = "numpy" },
@@ -825,9 +835,12 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "roma" },
+    { name = "tensordict" },
     { name = "torch" },
     { name = "torch-ctf" },
     { name = "torch-fourier-filter" },
+    { name = "torch-fourier-rescale" },
+    { name = "torch-fourier-shell-correlation" },
     { name = "torch-fourier-shift" },
     { name = "torch-fourier-slice" },
     { name = "torch-grid-utils" },
@@ -838,9 +851,9 @@ dependencies = [
     { name = "types-pyyaml" },
     { name = "zenodo-get" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d4/51/2c33a8c3b1a07f0c9c245db2b5869bc3206a63ae99f6a038d629ef80b020/leopard_em-1.2.tar.gz", hash = "sha256:b3f27b1d60b95ed2bd83a3bffc3b8b2c5fd4044289a9114cea1ac00eca064285", size = 10437162, upload-time = "2026-04-10T20:53:58.655Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cb/50/31244a97ae28804dda864a4af629e41ab4f3dfacfaa5affb4d21de803067/leopard_em-1.3.1.tar.gz", hash = "sha256:f80266606238d4d81d646e8afd6ab193fcf6422f350c29486287099e9c65331e", size = 10831566, upload-time = "2026-11-06T21:26:45.648Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0b/7e/217a06fd37d356d0a60ffa8e7733f4a704022dcbc338808484f7cc888cc6/leopard_em-1.2-py3-none-any.whl", hash = "sha256:4d83e3ec7852c6d1fab2ee971bf2e002729d167b0f7ace8c1c637bd589a9659c", size = 115384, upload-time = "2026-04-10T20:53:56.481Z" },
+    { url = "https://files.pythonhosted.org/packages/3f/7c/754f3774f5357a43934bc9afe51a7fb2a6cb2fa62bb0205ef677979d8217/leopard_em-1.3.1-py3-none-any.whl", hash = "sha256:ba41875f31d42c053c75fd424ab100f34d6198141a0234558163b97aebf52979", size = 190470, upload-time = "2026-11-06T21:26:43.872Z" },
 ]
 
 [[package]]
@@ -1859,6 +1872,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pyvers"
+version = "0.2.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/62/21/9daf8da2793d112a04b46ac33ab9046c91b0af8292cd93b3cfdd07ff7169/pyvers-0.2.3.tar.gz", hash = "sha256:c4b81c3a033963245e124cdecb052783c9c4cea3bb08c051833af1c44faa6283", size = 12347, upload-time = "2026-07-09T13:58:07.046Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2d/8d/63787e8feda59d981ebc953b6581ccab3c97cf7bfe0a6a407c07b50fc86c/pyvers-0.2.3-py3-none-any.whl", hash = "sha256:6f5b5612f2f4bd08caa49baa70fc5f875fc7da701a5385c13e244eea6b8114dd", size = 11757, upload-time = "2026-07-09T13:58:06.078Z" },
+]
+
+[[package]]
 name = "pyyaml"
 version = "6.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1983,7 +2005,7 @@ requires-dist = [
     { name = "eerfile" },
     { name = "einops" },
     { name = "h5py" },
-    { name = "leopard-em" },
+    { name = "leopard-em", specifier = ">=1.3.1" },
     { name = "mrcfile" },
     { name = "numpy" },
     { name = "opencv-python-headless" },
@@ -2238,6 +2260,20 @@ wheels = [
 ]
 
 [[package]]
+name = "tensordict"
+version = "0.15.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cloudpickle" },
+    { name = "numpy" },
+    { name = "pyvers" },
+    { name = "torch" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/78/6a/afc9e529c87fc47d6b9d869d7d4906334b4153f75764338158da1f32a1cd/tensordict-0.15.6-py3-none-any.whl", hash = "sha256:fd4dc096ad5f98d9418a90ed572fdb1d1f1f3286c82b7dc138e9a4130a6ba5c3", size = 876045, upload-time = "2026-11-11T21:18:33.021Z" },
+]
+
+[[package]]
 name = "tifffile"
 version = "2026.4.11"
 source = { registry = "https://pypi.org/simple" }
@@ -2360,6 +2396,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/0a/ae/33ca5329da7a7dc173f6fd422cb3fcfa183a125131411333b267de323c21/torch_fourier_rescale-0.6.0.tar.gz", hash = "sha256:7c41d1841b28ea011db1460323f818a2459f84c67c958440264626acf428031b", size = 9649, upload-time = "2026-09-11T21:18:31.549Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/da/f7/8a08592257985ca360469291b0d3d745fac358b82af4f6e11770666f9f34/torch_fourier_rescale-0.6.0-py3-none-any.whl", hash = "sha256:b1bd19c2a6ca88a7ac889eaf182dbcd091626479411abde9699e739e2eeac724", size = 8199, upload-time = "2026-09-11T21:18:30.501Z" },
+]
+
+[[package]]
+name = "torch-fourier-shell-correlation"
+version = "0.6.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "torch" },
+    { name = "torch-grid-utils" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bf/63/4dbab682956b48020a6e8ffbb7cdd96291d730b5e6ec59490baf22901cab/torch_fourier_shell_correlation-0.6.0.tar.gz", hash = "sha256:963c868e21f69acfe47b52bea560d46dff79c61361345a9c18e2e2b79129b48b", size = 9426, upload-time = "2026-09-11T21:18:32.532Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/85/8f/d28e0ff3b0327523639bfec8790dc20e76f016754315b0752007665f8eb2/torch_fourier_shell_correlation-0.6.0-py3-none-any.whl", hash = "sha256:8b3fbf2b3215d86d8f2cc5d797a055e717b6bdb715f81d57d23d85cd5263119f", size = 7232, upload-time = "2026-09-11T21:18:31.485Z" },
 ]
 
 [[package]]

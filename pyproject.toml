@@ -52,7 +52,7 @@ dependencies = [
     "torch-motion-correction>=0.0.5",
     "torch-fourier-filter",
     "torch-fourier-rescale",
-    "leopard-em",
+    "leopard-em>=1.3.1",  # 1.2 imports torch_motion_correction.data_io, gone in 0.6.0
     "scipy",
     "optuna",
     "h5py",
@@ -143,6 +143,8 @@ testpaths = ["tests"]
 filterwarnings = [
     "error",
     "ignore:`torch.jit.script_method` is deprecated:DeprecationWarning",
+    # The same warning from torch on Python 3.14 (torch.compile, e.g. on importing Leopard-EM)
+    "ignore:`torch.jit.script_method` is not supported in Python 3.14:DeprecationWarning",
     # mrcfile 1.5.4 sets ndarray.dtype directly when reading MRC headers, which
     # numpy >=2.5 deprecates. No fixed mrcfile release exists yet; remove this
     # once mrcfile stops triggering the warning.
