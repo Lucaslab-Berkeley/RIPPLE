@@ -1,0 +1,32 @@
+###############################################
+### DeCo-LACE Sum Re-fill Configuration File ###
+###############################################
+# Re-fills a sum outside its (reduced) beam ellipse with Gaussian noise that has the beam interior's radial
+# power spectrum, and writes a 2DTM search mask (True where a particle centre may lie): the reduced ellipse
+# minus contamination blobs dilated by about a particle radius. Run it on the sum you will search.
+
+refill_config:
+  sum_path: ../../example/output/my_movie_dw_sum.mrc              # (required)  The sum to re-fill (MRC).
+  beam_mask_result_path: ../../example/output/my_movie_beam_mask.json  # The DeCo-LACE pipeline's beam_mask_output_path for this movie.
+  beam_mask_path: null                # Or: a mask image in the sum's frame (.npy/.mrc/.tif), nonzero inside the region to keep. Give one of the two.
+  diameter_reduction: 0.06            # (default 0.06)  Shrink of both ellipse radii for the region kept and searched; drops the fringe inside the rim.
+  binning: null                       # (default null)  Raw-frame pixels per sum pixel; null = output crop extent / sum shape (the super-resolution factor).
+
+  taper_sigma_px: 2.0                 # (default 2.0)   Blur of the beam mask that sets the blend weight, in sum pixels.
+  interior_erosion_px: 8              # (default 8)     Erosion of the beam for the spectrum's tiles.
+  psd_box: 512                        # (default 512)   Tile size of the interior power spectrum.
+  psd_step: 256                       # (default 256)   Tile stride.
+
+  contamination: true                 # (default true)  Leave contamination blobs inside the beam out of the search mask.
+  contamination_band_px: [8.0, 150.0] # (default [8, 150])  Gaussian sigmas of the band-pass that finds them, pixels.
+  contamination_threshold_sd: 5.0     # (default 5.0)   Robust SDs from the band-pass median that mark a blob pixel.
+  contamination_min_area_px: 1000     # (default 1000)  Smallest blob kept, pixels.
+  contamination_polarity: dark        # (default dark)  dark, bright or both.
+  exclusion_radius_px: 100.0          # (default 100)   Dilation of the blobs in the search mask: about a particle radius, pixels.
+  border_px: 2                        # (default 2)     No search position this close to the image border.
+  seed: 0
+
+  refilled_sum_output_path: ../../example/output/my_movie_dw_sum_refill.mrc   # (required)
+  search_mask_output_path: ../../example/output/my_movie_search_mask.npy      # (required)  .npy (bool) or .mrc (0/1)
+  stats_output_path: ../../example/output/my_movie_refill_stats.json          # (optional)
+  allow_file_overwrite: false

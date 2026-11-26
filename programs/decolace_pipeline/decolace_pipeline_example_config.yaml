@@ -33,6 +33,11 @@ beam_mask_config:
   working_pixel_size: 8.0       # (optional, default 8.0)      Approximate pixel size (Angstroms) the frame sum is binned to before edge detection.
   edge_smoothing_sigma: 120.0   # (optional, default 120.0)    Gaussian smoothing sigma (Angstroms) applied before edge detection.
 
+# --- Fitted beam ellipse and crop, per movie (optional) ---
+# A BeamMaskResult as JSON, prefixed with each movie's stem. programs/decolace_refill reads it to
+# re-fill the sum outside the beam and write a 2DTM search mask. If null, not saved.
+beam_mask_output_path: ../../example/output/beam_mask.json
+
 # --- Output file configuration ---
 output_config:
   allow_file_overwrite: true          # Allow writing of pre-existing files, safety mechanism.

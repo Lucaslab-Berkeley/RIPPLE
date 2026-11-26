@@ -15,6 +15,7 @@ import yaml
 from ripple.config import (
     AlignFramesConfig,
     BeamMaskConfig,
+    BeamMaskResult,
     ComputationalConfig,
     MovieConfig,
     OutputConfig,
@@ -100,6 +101,16 @@ def build_movie_outputs(
     return outputs
 
 
+def write_beam_mask_result(
+    result: BeamMaskResult, template: str | None, movie_path: str
+) -> None:
+    """Write `result` as JSON to `template` prefixed with the movie's stem (if set)."""
+    stem = os.path.splitext(os.path.basename(movie_path))[0]
+    path = _stem_prefixed(template, stem)
+    if path is not None:
+        Path(path).write_text(result.model_dump_json(indent=1), encoding="utf-8")
+
+
 def main() -> None:
     """Run beam mask estimation, motion estimation, and correction for each movie."""
     with open(PIPELINE_YAML_PATH, encoding="utf-8") as f:
@@ -122,6 +133,9 @@ def main() -> None:
     movie_paths = get_movie_paths(MOVIE_DIR)
     out_cfg = align_manager.output_config
     movie_outputs = build_movie_outputs(movie_paths, out_cfg)
+    # optional: each movie's fitted ellipse and crop (a BeamMaskResult as JSON), for
+    # programs/decolace_refill, which re-fills the sum outside the beam
+    beam_mask_template = config.get("beam_mask_output_path")
 
     for movie_path, outputs in zip(movie_paths, movie_outputs, strict=True):
         movie_config.movie_path = movie_path
@@ -150,6 +164,7 @@ def main() -> None:
 
         # 2. Estimate the beam mask from the raw frame sum (reuses `movie`, no reload).
         beam_mask_result, beam_mask = beam_mask_manager.estimate_with_mask(movie=movie)
+        write_beam_mask_result(beam_mask_result, beam_mask_template, movie_path)
 
         # 3. Prepare the movie for alignment which does the following steps:
         #    a. Crops the movie to beam mask, if requested by CropBoundsConfig

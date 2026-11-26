@@ -10,6 +10,7 @@ from .manager_utils import (
     save_results,
 )
 from .polish_particles_manager import PolishParticlesManager
+from .refill_manager import RefillManager
 from .resum_manager import (
     ResumManager,
     load_deformation_field,
@@ -21,6 +22,7 @@ __all__ = [
     "BeamMaskManager",
     "EstimateFrameWeightsManager",
     "PolishParticlesManager",
+    "RefillManager",
     "ResumManager",
     "load_deformation_field",
     "load_initial_deformation_field",

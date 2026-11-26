@@ -12,6 +12,7 @@ from .computational_config import ComputationalConfig
 from .crop_bounds_config import CropBoundsConfig
 from .movie_config import MovieConfig
 from .output_config import OutputConfig
+from .refill_config import RefillConfig
 
 __all__ = [
     "AlignFramesConfig",
@@ -25,4 +26,5 @@ __all__ = [
     "OutputConfig",
     "PolishParticlesConfig",
     "PriorConfig",
+    "RefillConfig",
 ]
